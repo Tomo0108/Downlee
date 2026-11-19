@@ -4,26 +4,52 @@
  * DRM で保護されたストリーム（EME / Widevine）は再生もダウンロードもしない。
  */
 const MEDIA_EXT = /\.(m3u8|mpd|mp4|m4v|webm|mov|mkv|flv|f4v|ogv|mp3|m4a|aac|ogg|oga|opus|wav|flac)(?:$|[?#])/i
-const SEGMENT = /\.(ts|m4s|aac|vtt|webvtt|key)(?:$|[?#])|\/(seg|segment|frag|fragment|chunk)[-_]?\d+|[?&](range|bytestart|byteend)=/i
+const SEGMENT = /\.(ts|m4s|aac|vtt|webvtt|key)(?:$|[?#])|\/(seg|segment|frag|fragment|chunk)[-_]?\d+/i
 const MEDIA_TYPE = /^(video\/(?!mp2t)|audio\/|application\/(x-mpegurl|vnd\.apple\.mpegurl|dash\+xml|vnd\.ms-sstr\+xml))/i
+/** 拡張子のないマニフェスト（?format=m3u8 や Smooth Streaming の .ism/Manifest など） */
+const MANIFEST_HINT = /[?&](format|type|fmt|protocol)=(m3u8|hls|mpd|dash)\b|\.isml?\/manifest\b/i
+/** Range をクエリで指定する配信（分割読み込み）。取り除くとファイル全体の URL になる */
+const RANGE_PARAMS = ["range", "bytestart", "byteend", "rn", "rbuf"]
+const RANGE_QUERY = /[?&](range|bytestart|byteend)=/i
 
-/** 応答 1 件がメディアかを判定して、種類・大きさを返す（純粋な処理。テストあり） */
+function stripRange(url) {
+  try {
+    const u = new URL(url)
+    for (const k of RANGE_PARAMS) u.searchParams.delete(k)
+    return u.toString()
+  } catch {
+    return url
+  }
+}
+
+/** 応答 1 件がメディアかを判定して、種類・大きさ・保存に使う URL を返す（純粋な処理。テストあり） */
 function classifyResponse({ url, resourceType, contentType, contentLength, contentRange, statusCode }) {
   if (!/^https?:/i.test(url)) return null
   if (statusCode && statusCode >= 400) return null
   const type = String(contentType || "").split(";")[0].trim().toLowerCase()
   const byExt = MEDIA_EXT.exec(url)?.[1]?.toLowerCase()
-  const isManifest = /mpegurl/.test(type) || byExt === "m3u8" || /dash\+xml/.test(type) || byExt === "mpd" || /ms-sstr/.test(type)
+  const hint = MANIFEST_HINT.exec(url)
+  const hinted = hint ? (/isml?\/manifest/i.test(hint[0]) ? "mss" : /m3u8|hls/i.test(hint[2] ?? "") ? "hls" : "dash") : null
+  const binary = !type || /octet-stream|^text\/plain$/.test(type)
+  const kind =
+    /mpegurl/.test(type) || byExt === "m3u8" ? "hls"
+    : /dash\+xml/.test(type) || byExt === "mpd" ? "dash"
+    : /ms-sstr/.test(type) ? "mss"
+    : hinted && (binary || /xml|json|mpegurl/.test(type)) ? hinted
+    : null
+  const isManifest = kind !== null
   if (!isManifest && SEGMENT.test(url)) return null
   if (!isManifest && type === "video/mp2t") return null
   const isMedia = isManifest || MEDIA_TYPE.test(type) || resourceType === "media" || (byExt && !/^(text|image)\//.test(type) && type !== "text/html")
   if (!isMedia) return null
-  const kind = /mpegurl/.test(type) || byExt === "m3u8" ? "hls" : /dash\+xml/.test(type) || byExt === "mpd" ? "dash" : /ms-sstr/.test(type) ? "mss" : /^audio\//.test(type) || ["mp3", "m4a", "aac", "ogg", "oga", "opus", "wav", "flac"].includes(byExt) ? "audio" : "video"
+  const ranged = !isManifest && RANGE_QUERY.test(url)
+  const finalKind = kind ?? (/^audio\//.test(type) || ["mp3", "m4a", "aac", "ogg", "oga", "opus", "wav", "flac"].includes(byExt) ? "audio" : "video")
   const total = /\/(\d+)\s*$/.exec(String(contentRange || ""))?.[1]
-  const size = Number(total ?? contentLength) || null
-  // ごく小さいファイル（広告のビーコン・効果音など）は拾わない
-  if ((kind === "video" || kind === "audio") && size !== null && size < 100 * 1024) return null
-  return { kind, contentType: type || null, size }
+  // 分割読み込みの 1 片の大きさはファイルの大きさではない
+  const size = Number(total ?? (ranged || contentRange ? undefined : contentLength)) || null
+  // ごく小さいファイル（広告のビーコン・効果音など）は拾わない（全体の大きさがわからない分割読み込みは拾う）
+  if (!isManifest && size !== null && size < 100 * 1024) return null
+  return { kind: finalKind, contentType: type || null, size, url: ranged ? stripRange(url) : url }
 }
 
 /** 同じメディアを 1 つにまとめるためのキー（Range 指定などの違いは無視する） */
@@ -67,11 +93,15 @@ function createSniffer({ BrowserWindow, session, getSettings, onFound, onState, 
   let win = null
   const found = new Map()
   let pageTitle = ""
+  // ページを移るたびに増える番号。SPA で URL だけ変わっても同じページの分として扱う
+  let nav = 0
 
   ses.setPermissionRequestHandler((_wc, permission, cb) => cb(permission === "fullscreen"))
 
   ses.webRequest.onResponseStarted((details) => {
-    if (!win || win.isDestroyed() || details.webContentsId !== win.webContents.id) return
+    if (!win || win.isDestroyed()) return
+    // Service Worker 経由の読み込みは webContentsId を持たない。専用の保存領域なので、ほかの窓の分は来ない
+    if (details.webContentsId != null && details.webContentsId !== win.webContents.id) return
     const header = (name) => {
       const h = details.responseHeaders ?? {}
       const key = Object.keys(h).find((k) => k.toLowerCase() === name)
@@ -81,14 +111,16 @@ function createSniffer({ BrowserWindow, session, getSettings, onFound, onState, 
     if (!hit) return
     const pageUrl = win.webContents.getURL()
     if (isBlocked(details.url, getSettings().blockedDomains) || isBlocked(pageUrl, getSettings().blockedDomains)) return
-    // 広告のリストに当たるメディア（動画広告など）は並べない
-    if (getSettings().adBlock && adblock?.isAd(details.url, pageUrl)) return
-    const key = mediaKey(details.url)
+    // 広告のリストに当たるメディア（動画広告など）は印を付けて、ふだんは隠す（誤判定でも［すべて］で見られる）
+    const ad = Boolean(getSettings().adBlock && adblock?.isAd(details.url, pageUrl))
+    const key = mediaKey(hit.url)
     const prev = found.get(key)
     const item = {
       id: prev?.id ?? randomUUID(),
-      url: details.url,
+      url: hit.url,
       pageUrl,
+      nav,
+      ad,
       pageTitle: win.webContents.getTitle() || pageTitle,
       kind: hit.kind,
       contentType: hit.contentType,
@@ -102,7 +134,7 @@ function createSniffer({ BrowserWindow, session, getSettings, onFound, onState, 
   function state() {
     if (!win || win.isDestroyed()) return { open: false }
     const wc = win.webContents
-    return { open: true, url: wc.getURL(), title: wc.getTitle(), canGoBack: wc.navigationHistory.canGoBack(), canGoForward: wc.navigationHistory.canGoForward(), loading: wc.isLoading() }
+    return { open: true, nav, url: wc.getURL(), title: wc.getTitle(), canGoBack: wc.navigationHistory.canGoBack(), canGoForward: wc.navigationHistory.canGoForward(), loading: wc.isLoading() }
   }
 
   /** 広告ブロックと拡張機能を設定に合わせる。戻り値は拡張機能ごとの状態 */
@@ -174,6 +206,7 @@ function createSniffer({ BrowserWindow, session, getSettings, onFound, onState, 
     const push = () => onState(state())
     wc.on("did-navigate", () => {
       pageTitle = ""
+      nav++
       push()
     })
     wc.on("did-navigate-in-page", push)

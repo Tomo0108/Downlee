@@ -52,12 +52,14 @@ export function FindPage({ settings, onAnalyze }: { settings: Settings; onAnalyz
     }
   }
 
-  // ふだんは開いているページで見つかったものだけを出す（ほかのページの分は［すべてのページ］で見る）
+  // ふだんは開いているページで見つかったものだけを出す（ほかのページの分と広告らしいものは［すべて］で見る）
   const [allPages, setAllPages] = useState(false)
   const pageKey = (u?: string) => (u ?? "").split("#")[0]
-  const onPage = state.open && state.url ? found.filter((m) => pageKey(m.pageUrl) === pageKey(state.url)) : found
-  const list = [...(allPages ? found : onPage)].reverse()
-  const hidden = found.length - onPage.length
+  const isCurrent = (m: FoundMedia) => !state.open || (state.nav !== undefined && m.nav === state.nav) || (!!state.url && pageKey(m.pageUrl) === pageKey(state.url))
+  const visible = found.filter((m) => isCurrent(m) && !m.ad)
+  const list = [...(allPages ? found : visible)].reverse()
+  const hidden = found.length - visible.length
+  const analyzePage = () => state.url && onAnalyze(state.url, { fromBrowser: true })
 
   return (
     <div className="h-full overflow-y-auto">
@@ -69,8 +71,8 @@ export function FindPage({ settings, onAnalyze }: { settings: Settings; onAnalyz
             sections={[
               { title: "使い方", items: ["ページを Downlee 専用のブラウザで開き、動画を再生してください。ページが読み込んだ動画・音声がここに並びます。", "［保存］で選んだ形式で保存します。［読み込む］では画質を選べます。", "［このページを読み込む］は、開いているページそのものを［ダウンロード］で読み込みます。"] },
               { title: "ログインが必要なサイト", items: ["専用ブラウザでログインしておくと、そのログイン状態でダウンロードします。", "ログイン情報は Downlee の中だけに保存され、ふだんのブラウザとは分かれています。［設定］から消せます。"] },
-              { title: "広告", items: ["専用ブラウザでは広告と追跡をブロックし、動画広告は一覧に出しません（［設定］で切り替え）。", "ほかのページで見つかったものは隠しています。［すべてのページ］で表示します。", "ブラウザの拡張機能（展開済みのフォルダ）も［設定］から入れられます。"] },
-              { title: "見つからないとき", items: ["一度再生を始めると見つかることがあります。", "DRM（著作権保護）がかかった動画は再生もダウンロードもできません。", "除外するサイトは［設定］で指定できます。"] },
+              { title: "広告", items: ["専用ブラウザでは広告と追跡をブロックし、動画広告らしいものは隠します（［設定］で切り替え）。", "ほかのページで見つかったものと広告らしいものは［すべて］で表示します。", "ブラウザの拡張機能（展開済みのフォルダ）も［設定］から入れられます。"] },
+              { title: "見つからないとき", items: ["一度再生を始めると見つかることがあります。", "それでも出ないときは［このページを読み込む］で、ページごと読み込めます。", "［すべて］を押すと、広告と判定して隠したものも表示します。", "DRM（著作権保護）がかかった動画は再生もダウンロードもできません。", "除外するサイトは［設定］で指定できます。"] },
               { title: "操作", items: ["専用ブラウザでは Alt+← で戻る、Alt+→ で進む、F5 で読み直しです。"] },
             ]}
           />
@@ -100,7 +102,7 @@ export function FindPage({ settings, onAnalyze }: { settings: Settings; onAnalyz
               {state.title || hostOf(state.url)}
               <span className="ml-2 text-xs text-muted-foreground">{hostOf(state.url)}</span>
             </button>
-            <Button size="sm" variant="secondary" onClick={() => state.url && onAnalyze(state.url, { fromBrowser: true })}>
+            <Button size="sm" variant="secondary" onClick={analyzePage}>
               <Search />
               このページを読み込む
             </Button>
@@ -119,7 +121,7 @@ export function FindPage({ settings, onAnalyze }: { settings: Settings; onAnalyz
             <div className="ml-auto flex items-center gap-1">
               {(hidden > 0 || allPages) && (
                 <Button size="sm" variant="ghost" className="text-muted-foreground" aria-pressed={allPages} onClick={() => setAllPages((v) => !v)}>
-                  {allPages ? "このページだけ" : `すべてのページ（+${hidden}）`}
+                  {allPages ? "このページだけ" : `すべて（+${hidden}）`}
                 </Button>
               )}
               <PresetMenu value={presetId} onChange={setPresetId} size="sm" className="w-28" />
@@ -130,7 +132,19 @@ export function FindPage({ settings, onAnalyze }: { settings: Settings; onAnalyz
               )}
             </div>
           </div>
-          <ListFrame empty={!list.length} icon={<Radar className="size-5" />} emptyTitle={found.length ? "このページではまだ見つかっていません" : state.open ? "ページで動画を再生してください" : "ページを開くと、再生される動画がここに並びます"}>
+          <ListFrame
+            empty={!list.length}
+            icon={<Radar className="size-5" />}
+            emptyTitle={state.open ? "動画を再生しても出ないときは、ページごと読み込めます" : "ページを開くと、再生される動画がここに並びます"}
+            emptyAction={
+              state.open && state.url ? (
+                <Button size="sm" variant="secondary" onClick={analyzePage}>
+                  <Search />
+                  このページを読み込む
+                </Button>
+              ) : undefined
+            }
+          >
             <ul className="flex flex-col gap-0.5">
               {list.map((m) => (
                 <li key={m.id} className="flex items-center gap-3 rounded-lg px-3 py-2.5 hover:bg-accent/60">
@@ -138,7 +152,14 @@ export function FindPage({ settings, onAnalyze }: { settings: Settings; onAnalyz
                     {KIND_LABEL[m.kind]}
                   </Badge>
                   <div className="min-w-0 flex-1">
-                    <div className="truncate text-sm font-medium">{m.pageTitle || hostOf(m.pageUrl)}</div>
+                    <div className="flex min-w-0 items-center gap-2">
+                      <span className="truncate text-sm font-medium">{m.pageTitle || hostOf(m.pageUrl)}</span>
+                      {m.ad && (
+                        <Badge variant="outline" className="shrink-0 text-[11px] font-normal text-muted-foreground">
+                          広告かも
+                        </Badge>
+                      )}
+                    </div>
                     <div className="truncate text-xs text-muted-foreground" title={m.url}>
                       {[formatBytes(m.size), hostOf(m.url), m.url.split(/[?#]/)[0].split("/").pop()].filter(Boolean).join(" · ")}
                     </div>

@@ -197,10 +197,15 @@ export interface FoundMedia {
   contentType: string | null
   size: number | null
   at: string
+  /** 見つけたときのページ移動の番号（BrowserState.nav と同じなら、いま開いているページの分） */
+  nav?: number
+  /** 広告のリストに当たったもの。ふだんは隠す */
+  ad?: boolean
 }
 
 export interface BrowserState {
   open: boolean
+  nav?: number
   url?: string
   title?: string
   canGoBack?: boolean

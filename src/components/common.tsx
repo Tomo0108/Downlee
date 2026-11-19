@@ -143,10 +143,16 @@ export function EmptyState({ icon, title, children }: { icon: ReactNode; title: 
 /**
  * 一覧の枠。項目がまだないときも同じ大きさの枠を先に出し、空の案内を枠の中に置く（項目だけが浮かないようにする）。
  */
-export function ListFrame({ empty, icon, emptyTitle, children, className }: { empty: boolean; icon: ReactNode; emptyTitle: string; children?: ReactNode; className?: string }) {
+export function ListFrame({ empty, icon, emptyTitle, emptyAction, children, className }: { empty: boolean; icon: ReactNode; emptyTitle: string; emptyAction?: ReactNode; children?: ReactNode; className?: string }) {
   return (
     <div className={cn("flex min-h-72 flex-col rounded-2xl border border-border/60 bg-card p-1.5 shadow-card", className)}>
-      {empty ? <EmptyState icon={icon} title={emptyTitle} /> : children}
+      {empty ? (
+        <EmptyState icon={icon} title={emptyTitle}>
+          {emptyAction}
+        </EmptyState>
+      ) : (
+        children
+      )}
     </div>
   )
 }

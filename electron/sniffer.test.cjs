@@ -36,3 +36,16 @@ test("アドレス欄の入力", () => {
   assert.equal(normalizeUrl("example.com/a"), "https://example.com/a")
   assert.equal(normalizeUrl("猫 動画"), "https://www.google.com/search?q=%E7%8C%AB%20%E5%8B%95%E7%94%BB")
 })
+
+test("classifyResponse: 拡張子のないマニフェスト・分割読み込み・octet-stream", () => {
+  assert.equal(classifyResponse({ url: "https://c/play?id=1&format=m3u8", contentType: "application/octet-stream" }).kind, "hls")
+  assert.equal(classifyResponse({ url: "https://c/v.ism/Manifest", contentType: "text/xml" }).kind, "mss")
+  assert.equal(classifyResponse({ url: "https://c/x/index.m3u8", contentType: "text/plain" }).kind, "hls")
+  assert.equal(classifyResponse({ url: "https://c/v.mp4", contentType: "binary/octet-stream", contentLength: "9000000" }).kind, "video")
+  const r = classifyResponse({ url: "https://c/videoplayback?id=9&range=0-50000&itag=137", contentType: "video/mp4", contentLength: "50001", resourceType: "xhr" })
+  assert.equal(r.kind, "video")
+  assert.equal(r.size, null)
+  assert.equal(r.url, "https://c/videoplayback?id=9&itag=137")
+  assert.equal(classifyResponse({ url: "https://c/api?format=json", contentType: "application/json" }), null)
+  assert.equal(classifyResponse({ url: "https://c/a.mp4", contentType: "video/mp4", contentRange: "bytes 0-99/5000" }), null)
+})
