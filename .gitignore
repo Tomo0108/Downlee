@@ -1,0 +1,55 @@
+# 依存パッケージ
+node_modules/
+
+# ビルド成果物・配布物
+dist/
+dist-electron/
+release/
+out/
+*.tsbuildinfo
+.vite/
+
+# 同梱するツール（yt-dlp・ffmpeg。scripts/fetch-tools.mjs で取得）
+vendor/
+
+# フォント（Segoe UI・BIZ UDゴシック。再配布の条件があるため各 PC の assets/fonts/ に置く。Rakuform と同じ運用）
+assets/fonts/
+public/fonts/
+
+# ダウンロードした動画・音声（試験用）
+*.mp4
+*.mkv
+*.webm
+*.mov
+*.avi
+*.mp3
+*.m4a
+*.flac
+*.wav
+*.part
+
+# 環境変数・秘密情報
+.env
+.env.*
+!.env.example
+*.local
+*.pem
+*.key
+cookies*.txt
+
+# ログ・一時ファイル
+logs/
+*.log
+npm-debug.log*
+coverage/
+tmp/
+.cache/
+
+# エディタ・OS
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+desktop.ini

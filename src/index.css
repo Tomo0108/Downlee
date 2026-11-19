@@ -1,0 +1,413 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+/* 出典: Rakuform src/index.css（RakuManual app/src/index.css 由来）。カラートークン・テーマ・基本レイヤーをコピーし、Downlee 内で独立管理する。 */
+@custom-variant dark (&:is(.dark *));
+
+/* Electron のカスタムタイトルバー。ネイティブ操作ボタンを残したまま左側をドラッグ領域にする。 */
+.desktop-titlebar {
+  -webkit-app-region: drag;
+}
+
+/* =========================================================
+ * カラーシステム
+ * - サーフェス階層: sidebar(沈下) < background(キャンバス) < card(浮上)
+ * - ニュートラル面はアクセント色から分離し、本文の可読性を保つ
+ * - 背景・カード・操作部の明度差で階層を示す
+ * - アクセント5色: red / blue / teal / amber / emerald
+ *   （マニュアル制作向けに彩度を抑え、色相差で識別しやすく選定）
+ * ======================================================= */
+
+/* 本文のリンク色。出力物（白い紙面）と同じ青で、アクセント色とは独立させる */
+:root {
+  --manual-link: #1565c0;
+}
+
+:root,
+[data-accent="red"] {
+  --brand-hue: 29;
+  --neutral-hue: 38;
+
+  --primary: oklch(0.51 0.175 var(--brand-hue));
+  --primary-foreground: oklch(0.99 0 0);
+  --primary-subtle: oklch(0.955 0.036 var(--brand-hue));
+  --primary-muted: oklch(0.91 0.052 var(--brand-hue));
+  --ring: oklch(0.51 0.175 var(--brand-hue));
+
+  --background: oklch(0.976 0.002 250);
+  --foreground: oklch(0.235 0.006 250);
+  --card: oklch(1 0 0);
+  --card-foreground: var(--foreground);
+  --popover: oklch(1 0 0);
+  --popover-foreground: var(--foreground);
+
+  --secondary: oklch(0.955 0.003 250);
+  --secondary-foreground: oklch(0.32 0.006 250);
+  --muted: oklch(0.948 0.004 250);
+  --muted-foreground: oklch(0.48 0.009 250);
+  --accent: oklch(0.938 0.005 250);
+  --accent-foreground: oklch(0.3 0.006 250);
+
+  --border: oklch(0.9 0.004 250);
+  --input: oklch(0.85 0.005 250);
+  --flow-canvas: oklch(0.972 0.004 250);
+  --flow-node: oklch(1 0 0);
+  --flow-node-border: oklch(0.69 0.009 250);
+  --flow-edge: oklch(0.32 0.009 250);
+  --flow-edge-muted: oklch(0.48 0.009 250);
+  --flow-guide: oklch(0.77 0.007 250);
+  --flow-guide-fill: oklch(0.95 0.004 250 / 0.78);
+  --flow-branch-yes: oklch(0.5 0.12 160);
+  --flow-branch-no: oklch(0.55 0.2 20);
+
+  --sidebar: oklch(0.959 0.004 250);
+  --sidebar-foreground: var(--foreground);
+  --sidebar-primary: var(--primary);
+  --sidebar-primary-foreground: var(--primary-foreground);
+  --sidebar-accent: oklch(0.916 0.006 250);
+  --sidebar-accent-foreground: oklch(0.28 0.006 250);
+  --sidebar-border: oklch(0.9 0.004 250);
+  --sidebar-ring: var(--ring);
+
+  --destructive: oklch(0.54 0.21 25);
+  --destructive-foreground: oklch(0.99 0 0);
+
+  --chart-1: oklch(0.55 0.175 var(--brand-hue));
+  --chart-2: oklch(0.62 0.12 195);
+  --chart-3: oklch(0.48 0.08 255);
+  --chart-4: oklch(0.75 0.14 85);
+  --chart-5: oklch(0.58 0.16 330);
+
+  --status-hearing-bg: oklch(0.955 0.04 85);
+  --status-hearing-fg: oklch(0.42 0.09 65);
+  --status-hearing-border: oklch(0.87 0.06 80);
+  --status-flow-bg: oklch(0.955 0.035 235);
+  --status-flow-fg: oklch(0.4 0.1 240);
+  --status-flow-border: oklch(0.87 0.05 235);
+  --status-deepdive-bg: oklch(0.955 0.04 300);
+  --status-deepdive-fg: oklch(0.42 0.12 295);
+  --status-deepdive-border: oklch(0.87 0.06 295);
+  --status-manual-bg: oklch(0.955 0.04 55);
+  --status-manual-fg: oklch(0.43 0.1 45);
+  --status-manual-border: oklch(0.87 0.06 55);
+  --status-published-bg: oklch(0.955 0.04 155);
+  --status-published-fg: oklch(0.4 0.1 155);
+  --status-published-border: oklch(0.87 0.06 155);
+
+  /* セマンティック（成功・警告・情報・エラー）— アクセント色に依存しない */
+  --semantic-success-bg: oklch(0.955 0.04 155);
+  --semantic-success-fg: oklch(0.4 0.1 155);
+  --semantic-success-border: oklch(0.87 0.06 155);
+  --semantic-warning-bg: oklch(0.955 0.04 85);
+  --semantic-warning-fg: oklch(0.42 0.09 65);
+  --semantic-warning-border: oklch(0.87 0.06 80);
+  --semantic-info-bg: oklch(0.955 0.035 235);
+  --semantic-info-fg: oklch(0.4 0.1 240);
+  --semantic-info-border: oklch(0.87 0.05 235);
+  --semantic-danger-bg: oklch(0.955 0.04 25);
+  --semantic-danger-fg: oklch(0.45 0.14 25);
+  --semantic-danger-border: oklch(0.87 0.06 25);
+}
+
+[data-accent="blue"] {
+  --brand-hue: 250;
+  --neutral-hue: 248;
+  --primary: oklch(0.5 0.14 var(--brand-hue));
+  --primary-subtle: oklch(0.955 0.03 var(--brand-hue));
+  --primary-muted: oklch(0.91 0.045 var(--brand-hue));
+  --ring: oklch(0.5 0.14 var(--brand-hue));
+  --chart-1: oklch(0.54 0.14 var(--brand-hue));
+}
+
+[data-accent="teal"] {
+  --brand-hue: 188;
+  --neutral-hue: 192;
+  --primary: oklch(0.5 0.095 var(--brand-hue));
+  --primary-subtle: oklch(0.955 0.028 var(--brand-hue));
+  --primary-muted: oklch(0.91 0.04 var(--brand-hue));
+  --ring: oklch(0.5 0.095 var(--brand-hue));
+  --chart-1: oklch(0.54 0.095 var(--brand-hue));
+}
+
+[data-accent="amber"] {
+  --brand-hue: 62;
+  --neutral-hue: 55;
+  --primary: oklch(0.52 0.125 var(--brand-hue));
+  --primary-subtle: oklch(0.955 0.034 var(--brand-hue));
+  --primary-muted: oklch(0.91 0.05 var(--brand-hue));
+  --ring: oklch(0.52 0.125 var(--brand-hue));
+  --chart-1: oklch(0.56 0.125 var(--brand-hue));
+}
+
+[data-accent="emerald"] {
+  --brand-hue: 155;
+  --neutral-hue: 152;
+  --primary: oklch(0.5 0.11 var(--brand-hue));
+  --primary-subtle: oklch(0.955 0.03 var(--brand-hue));
+  --primary-muted: oklch(0.91 0.045 var(--brand-hue));
+  --ring: oklch(0.5 0.11 var(--brand-hue));
+  --chart-1: oklch(0.54 0.11 var(--brand-hue));
+}
+
+
+/* Downlee の主軸の色：アイコンの紫〜青のグラデーションの中間（藍）に合わせる */
+[data-accent="violet"] {
+  --brand-hue: 278;
+  --neutral-hue: 270;
+  --primary: oklch(0.52 0.19 var(--brand-hue));
+  --primary-subtle: oklch(0.955 0.03 var(--brand-hue));
+  --primary-muted: oklch(0.91 0.05 var(--brand-hue));
+  --ring: oklch(0.52 0.19 var(--brand-hue));
+  --chart-1: oklch(0.56 0.19 var(--brand-hue));
+}
+
+/*
+ * ダークテーマ: 純黒を避けたインクグレー。
+ * GitHub Primerの青みを含む暗色面と、Discordの面ごとの明度差を参考に、
+ * 長時間の文書作成でも「背景 < 編集面 < ポップオーバー」が判別できるようにする。
+ */
+:root.dark {
+  --manual-link: #8ab4f8;
+  --primary: oklch(0.7 0.14 var(--brand-hue));
+  --primary-foreground: oklch(0.2 0.012 var(--neutral-hue));
+  --primary-subtle: oklch(0.3 0.05 var(--brand-hue));
+  --primary-muted: oklch(0.36 0.06 var(--brand-hue));
+  --ring: oklch(0.72 0.14 var(--brand-hue));
+
+  --background: oklch(0.205 0.009 250);
+  --foreground: oklch(0.945 0.006 250);
+  --card: oklch(0.255 0.011 250);
+  --card-foreground: var(--foreground);
+  --popover: oklch(0.275 0.012 250);
+  --popover-foreground: var(--foreground);
+  --secondary: oklch(0.285 0.012 250);
+  --secondary-foreground: oklch(0.91 0.006 250);
+  --muted: oklch(0.3 0.013 250);
+  --muted-foreground: oklch(0.755 0.011 250);
+  --accent: oklch(0.325 0.014 250);
+  --accent-foreground: var(--foreground);
+  --border: oklch(0.405 0.014 250);
+  --input: oklch(0.335 0.014 250);
+  --flow-canvas: oklch(0.19 0.01 250);
+  --flow-node: oklch(0.285 0.014 250);
+  --flow-node-border: oklch(0.6 0.018 250);
+  --flow-edge: oklch(0.92 0.008 250);
+  --flow-edge-muted: oklch(0.77 0.015 250);
+  --flow-guide: oklch(0.48 0.014 250);
+  --flow-guide-fill: oklch(0.245 0.012 250 / 0.78);
+  --flow-branch-yes: oklch(0.8 0.13 160);
+  --flow-branch-no: oklch(0.76 0.15 20);
+
+  --sidebar: oklch(0.19 0.012 250);
+  --sidebar-foreground: var(--foreground);
+  --sidebar-accent: oklch(0.31 0.016 250);
+  --sidebar-accent-foreground: var(--foreground);
+  --sidebar-border: oklch(0.37 0.014 250);
+
+  --destructive: oklch(0.68 0.18 25);
+  --destructive-foreground: oklch(0.2 0.012 25);
+  --chart-1: oklch(0.72 0.14 var(--brand-hue));
+  --chart-2: oklch(0.76 0.11 195);
+  --chart-3: oklch(0.7 0.08 255);
+  --chart-4: oklch(0.8 0.13 85);
+  --chart-5: oklch(0.72 0.14 330);
+
+  --status-hearing-bg: oklch(0.31 0.055 85);
+  --status-hearing-fg: oklch(0.88 0.1 85);
+  --status-hearing-border: oklch(0.48 0.07 85);
+  --status-flow-bg: oklch(0.3 0.045 235);
+  --status-flow-fg: oklch(0.86 0.08 235);
+  --status-flow-border: oklch(0.47 0.06 235);
+  --status-deepdive-bg: oklch(0.3 0.05 300);
+  --status-deepdive-fg: oklch(0.88 0.1 300);
+  --status-deepdive-border: oklch(0.47 0.07 300);
+  --status-manual-bg: oklch(0.31 0.055 55);
+  --status-manual-fg: oklch(0.9 0.1 55);
+  --status-manual-border: oklch(0.48 0.07 55);
+  --status-published-bg: oklch(0.3 0.05 155);
+  --status-published-fg: oklch(0.86 0.09 155);
+  --status-published-border: oklch(0.47 0.07 155);
+
+  --semantic-success-bg: oklch(0.3 0.05 155);
+  --semantic-success-fg: oklch(0.86 0.09 155);
+  --semantic-success-border: oklch(0.47 0.07 155);
+  --semantic-warning-bg: oklch(0.31 0.055 85);
+  --semantic-warning-fg: oklch(0.88 0.1 85);
+  --semantic-warning-border: oklch(0.48 0.07 85);
+  --semantic-info-bg: oklch(0.3 0.045 235);
+  --semantic-info-fg: oklch(0.86 0.08 235);
+  --semantic-info-border: oklch(0.47 0.06 235);
+  --semantic-danger-bg: oklch(0.31 0.055 25);
+  --semantic-danger-fg: oklch(0.88 0.1 25);
+  --semantic-danger-border: oklch(0.49 0.08 25);
+}
+
+@theme inline {
+  --color-manual-link: var(--manual-link);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary-subtle: var(--primary-subtle);
+  --color-primary-muted: var(--primary-muted);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-input-placeholder: color-mix(in oklab, var(--muted-foreground) 55%, transparent);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --shadow-card: var(--elevation-card);
+  --shadow-raised: var(--elevation-raised);
+  /* 英数字はSegoe UI、日本語グリフはBIZ UDGothicへフォールバックする。 */
+  --font-sans: "Segoe UI", "BIZ UDGothic", "BIZ UDゴシック", "Yu Gothic UI", "Meiryo UI", "Meiryo", sans-serif;
+}
+
+:root {
+  --radius: 0.75rem;
+  /* 影スケール: card(静止面) < raised(浮上・ポップオーバー) */
+  --elevation-card: 0 1px 2px rgb(0 0 0 / 0.03), 0 2px 8px rgb(0 0 0 / 0.025);
+  --elevation-raised: 0 4px 12px rgb(0 0 0 / 0.06), 0 12px 32px rgb(0 0 0 / 0.06);
+  --motion-fast: 140ms;
+  --motion-panel: 220ms;
+  --ease-interface: cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+@layer base {
+  input::placeholder,
+  textarea::placeholder {
+    color: var(--color-input-placeholder);
+    opacity: 1;
+  }
+  * {
+    @apply border-border outline-ring/50;
+  }
+  html {
+    scroll-behavior: smooth;
+    -webkit-tap-highlight-color: transparent;
+    color-scheme: light;
+  }
+  body {
+    @apply bg-background text-foreground;
+    font-feature-settings: normal;
+    font-kerning: normal;
+    font-optical-sizing: auto;
+    line-height: 1.65;
+    overflow: hidden;
+    overscroll-behavior: none;
+  }
+}
+
+html.dark {
+  color-scheme: dark;
+}
+
+/* ---- Downlee 固有 ---- */
+.desktop-titlebar .no-drag,
+.desktop-titlebar button,
+.desktop-titlebar input {
+  -webkit-app-region: no-drag;
+}
+
+/* アイコンと同じグラデーション（ロゴ・進捗の塗りに使う） */
+:root {
+  --brand-gradient: linear-gradient(120deg, #c264f4 0%, #6d4cf0 45%, #3b6ff2 70%, #19d3f5 100%);
+}
+
+.brand-gradient {
+  background-image: var(--brand-gradient);
+}
+
+/* 長い名前: ふだんは「…」で省略し、親要素に乗せる・選ぶと左へ流して末尾まで見せる（MarqueeText） */
+.marquee-text {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.marquee-text > span {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.marquee-host:hover .marquee-text > span,
+.marquee-host:focus-visible .marquee-text > span {
+  overflow: visible;
+  text-overflow: clip;
+  width: max-content;
+  transform: translateX(var(--marquee-shift, 0));
+  transition: transform var(--marquee-duration, 0s) linear 0.4s;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .marquee-host:hover .marquee-text > span,
+  .marquee-host:focus-visible .marquee-text > span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    width: auto;
+    transform: none;
+    transition: none;
+  }
+}
+
+/* 進捗バー: 塗りの上を淡いハイライトが流れる */
+@keyframes progress-sheen {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(400%); }
+}
+
+/* 進捗率のない処理: 塗りの区間が左右へ流れ続ける */
+@keyframes progress-indeterminate {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(300%); }
+}
+
+@utility progress-indeterminate {
+  animation: progress-indeterminate 1.8s cubic-bezier(0.45, 0, 0.35, 1) infinite;
+}
+
+@utility progress-sheen {
+  animation: progress-sheen 1.6s cubic-bezier(0.45, 0, 0.35, 1) infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .progress-indeterminate,
+  .progress-sheen {
+    animation: none;
+  }
+}
+
+/* ファイルを落とせる場所 */
+.drop-active {
+  outline: 2px dashed var(--primary);
+  outline-offset: -6px;
+  background: var(--primary-subtle);
+}
