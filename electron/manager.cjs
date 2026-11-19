@@ -175,13 +175,19 @@ class DownloadManager extends EventEmitter {
       return
     }
     this.children.set(job.id, child)
-    // 出力が長く止まったままなら、いったん止めて続きからやり直す（HLS の取得が固まったときなど）
+    // 進まないまま長く止まっていたら打ち切る（HLS の断片が届かないときなど）。
+    // 準備の間は出力があれば進んでいるとみなし、取得が始まってからはデータが増えたときだけ進んだとみなす
     let lastActivity = this.now()
+    let started = false
+    let gotData = false
+    let lastBytes = null
+    let lastRetry = null
     const stallMs = this.deps.stallMs ?? 120_000
     if (job.type === "download") {
       const timer = setInterval(() => {
         if (job.status === "running" && this.now() - lastActivity > stallMs) {
           clearInterval(timer)
+          job.stallInfo = { gotData, lastRetry }
           this.stop(job, "stalled")
         }
       }, Math.min(15_000, stallMs))
@@ -192,7 +198,7 @@ class DownloadManager extends EventEmitter {
     let stderrTail = ""
     let duration = job.duration ?? null
     const onLine = (line, fromErr) => {
-      lastActivity = this.now()
+      if (job.type === "convert" || !started) lastActivity = this.now()
       if (job.type === "convert") {
         if (fromErr) {
           stderrTail = (stderrTail + line + "\n").slice(-4000)
@@ -210,8 +216,33 @@ class DownloadManager extends EventEmitter {
       }
       if (p.type === "progress") {
         const { type: _t, status: _s, ...rest } = p
+        started = true
+        if (p.downloaded !== null && p.downloaded !== lastBytes) {
+          if (lastBytes !== null || p.downloaded > 0) gotData = true
+          lastBytes = p.downloaded
+          lastActivity = this.now()
+        }
         this.progress(job, { ...rest, stage: p.status === "finished" ? job.progress.stage : null })
+      } else if (p.type === "prep") {
+        if (p.started) started = true
+        // 「全 N 個」のあとに来る「最初のデータを待っています」で上書きしない
+        if (job.progress.downloaded == null && !(p.started && /^最初の/.test(job.progress.stage ?? "") && /^最初の/.test(p.text))) {
+          this.update(job, { progress: { ...job.progress, stage: p.text } })
+        }
+      } else if (p.type === "retry") {
+        lastRetry = p.message
+        this.update(job, { progress: { ...job.progress, stage: `サーバーの応答を待っています（取り直し ${p.attempt}${p.max ? `/${p.max}` : ""}）`, speed: null, eta: null } })
+      } else if (p.type === "ffstats") {
+        started = true
+        if (p.bytes > 0 && p.bytes !== lastBytes) {
+          gotData = true
+          lastBytes = p.bytes
+          lastActivity = this.now()
+          const dur = job.duration ?? duration
+          this.progress(job, { downloaded: p.bytes, total: null, percent: dur ? Math.min(99, (p.seconds / dur) * 100) : null, speed: null, eta: null, stage: dur ? null : `取得中（${Math.floor(p.seconds / 60)}:${String(Math.floor(p.seconds % 60)).padStart(2, "0")} 分）` })
+        }
       } else if (p.type === "info") {
+        started = false
         const patch = {}
         if (p.title && p.title !== "NA" && (!job.titleLocked || job.playlist)) patch.currentTitle = p.title
         if (!job.title || job.title === job.url) patch.title = p.title
@@ -242,7 +273,19 @@ class DownloadManager extends EventEmitter {
       } else if (reason === "canceled") {
         this.finish(job, { status: "canceled" })
       } else if (reason === "stalled") {
-        this.retryLater(job, "止まったため、続きからやり直します", { code: "stalled", text: "応答が止まったままになりました。" })
+        const info = job.stallInfo ?? {}
+        delete job.stallInfo
+        if (!info.gotData && !job.progress.downloaded) {
+          // 一度もデータが届かないときは、待ち続けずに理由を出して止める
+          this.finish(job, {
+            status: "error",
+            error: { code: "noresponse", text: "サーバーからデータが届きません。サイトが取得を拒んでいるか、極端に混み合っています。" },
+            detail: info.lastRetry ? `最後のエラー：${info.lastRetry}` : "接続はできましたが、データが 1 バイトも届きませんでした。",
+            progress: { ...job.progress, speed: null, eta: null, stage: null },
+          })
+        } else {
+          this.retryLater(job, "止まったため、続きからやり直します", { code: "stalled", text: "途中から応答が止まったままになりました。" }, info.lastRetry)
+        }
       } else if (code === 0) {
         const files = job.type === "convert" ? [job.output] : job.files
         this.finish(job, { status: "done", files, progress: { ...job.progress, percent: 100, speed: null, eta: null, stage: null } })

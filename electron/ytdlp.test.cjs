@@ -70,7 +70,10 @@ test("進み具合・ファイル・情報・段階の行を読む", () => {
   assert.equal(info.duration, 61)
   assert.deepEqual(y.parseLine("[Merger] Merging formats into x.mp4"), { type: "stage", stage: "Merger" })
   assert.equal(y.parseLine("ERROR: [x] boom").message, "[x] boom")
-  assert.equal(y.parseLine("[youtube] abc: Downloading webpage"), null)
+  assert.equal(y.parseLine("[youtube] abc: Downloading webpage").text, "ページを読み込み中")
+  assert.equal(y.parseLine("[download] Got error: HTTP Error 403: Forbidden. Retrying fragment 1 (2/50)...").attempt, 2)
+  assert.equal(y.parseLine("size=    6656KiB time=00:00:20.00 bitrate=1kbits/s").bytes, 6656 * 1024)
+  assert.equal(y.parseLine("[some] random line"), null)
 })
 
 test("エラーを日本語にする（DRM は扱わない）", () => {

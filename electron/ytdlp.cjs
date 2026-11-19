@@ -156,6 +156,16 @@ const num = (v) => {
  * yt-dlp の 1 行を読み取る。
  * 戻り値：{ type: "progress", ... } | { type: "file", path } | { type: "info", ... } | { type: "stage", stage } | { type: "error", message } | null
  */
+/** [正規表現, 表示する文, ダウンロードが始まった印] */
+const PREP_STEPS = [
+  [/^\[[\w:.-]+\] [^\s]+: Downloading (webpage|API JSON|player|initial data|json)/i, "ページを読み込み中"],
+  [/Downloading (m3u8|MPD|ism|f4m) (information|manifest)|Checking m3u8 live status/i, "配信の情報を取得中"],
+  [/^\[info\] .*Downloading \d+ format/i, "ダウンロードを始めています"],
+  [/^\[(hlsnative|dashsegments)\] Total fragments: (\d+)/i, (m) => `最初の断片を待っています（全 ${m[2]} 個）`, true],
+  [/^\[download\] Destination:/i, "最初のデータを待っています", true],
+  [/^\[(FFmpeg|ffmpeg)\]|Press \[q\] to stop/i, "ffmpeg で取得中", true],
+]
+
 function parseLine(line) {
   const text = String(line).replace(/\r/g, "").trimEnd()
   if (!text) return null
@@ -191,6 +201,19 @@ function parseLine(line) {
   }
   const stage = /^\[(Merger|ExtractAudio|VideoConvertor|VideoRemuxer|EmbedSubtitle|EmbedThumbnail|Metadata|FixupM3u8|FixupM4a|FixupStretched|FixupDuplicateMoov|SponsorBlock|ModifyChapters|ThumbnailsConvertor|SubtitlesConvertor)\]/.exec(text)
   if (stage) return { type: "stage", stage: stage[1] }
+  // 取り直し：[download] Got error: HTTP Error 403: Forbidden. Retrying fragment 1 (2/50)...
+  const retry = /Got error: (.*?)\.? Retrying(?: fragment \d+)? \((\d+)\/(\d+|inf)\)/i.exec(text)
+  if (retry) return { type: "retry", message: retry[1], attempt: Number(retry[2]), max: retry[3] === "inf" ? null : Number(retry[3]) }
+  // 準備の段階（画面に「いま何をしているか」を出す）
+  const prep = PREP_STEPS.find(([re]) => re.test(text))
+  if (prep) return { type: "prep", text: typeof prep[1] === "function" ? prep[1](prep[0].exec(text)) : prep[1], started: prep[2] === true }
+  // ffmpeg で取得するとき（ライブ配信など）の進み具合：size=   1024KiB time=00:00:12.34
+  const ff = /^size=\s*(\d+)\s*(k|ki|m|mi)?B\b.*?time=\s*(-?[\d:.]+)/i.exec(text)
+  if (ff) {
+    const unit = /^m/i.test(ff[2] ?? "") ? 1024 * 1024 : ff[2] ? 1024 : 1
+    const [h, m, sec] = ff[3].replace(/^-/, "").split(":").map(Number)
+    return { type: "ffstats", bytes: Number(ff[1]) * unit, seconds: ff[3].startsWith("-") ? 0 : (h || 0) * 3600 + (m || 0) * 60 + (sec || 0) }
+  }
   if (/^ERROR:/.test(text)) return { type: "error", message: text.replace(/^ERROR:\s*/, "") }
   return null
 }
