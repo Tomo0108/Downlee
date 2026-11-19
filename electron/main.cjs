@@ -210,6 +210,8 @@ function sanitizeJob(raw) {
   job.maxHeight = Number(job.maxHeight) || 0
   job.playlist = job.playlist === true
   job.fromBrowser = job.fromBrowser === true
+  // 取り方の指定（再生しながら記録など）は、専用ブラウザで見つけたものだけ受け付ける
+  if (job.fromBrowser && (raw?.via === "record" || raw?.via === "browser")) job.via = raw.via
   return job
 }
 

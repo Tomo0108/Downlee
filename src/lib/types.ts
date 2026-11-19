@@ -121,6 +121,8 @@ export interface JobRequest {
   fromBrowser?: boolean
   presetLabel?: string
   sourceKind?: string
+  /** 取り方。record は再生しながら記録（専用ブラウザで見つけたものだけ） */
+  via?: "browser" | "record"
   /* 変換 */
   input?: string
   target?: string

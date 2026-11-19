@@ -1,4 +1,4 @@
-import { ArrowLeft, ArrowRight, Download, Globe, Loader2, RotateCw, Radar, Search, Trash2, X } from "lucide-react"
+import { ArrowLeft, ArrowRight, CircleDot, Download, Globe, Loader2, RotateCw, Radar, Search, Trash2, X } from "lucide-react"
 import { type FormEvent, useEffect, useState } from "react"
 import { HelpButton } from "@/components/HelpButton"
 import { IconButton, ListFrame, Thumb, useNotice } from "@/components/common"
@@ -42,11 +42,11 @@ export function FindPage({ settings, onAnalyze }: { settings: Settings; onAnalyz
     }
   }
 
-  const download = async (m: FoundMedia) => {
+  const download = async (m: Pick<FoundMedia, "url" | "pageUrl" | "pageTitle" | "kind">, via?: "record") => {
     const preset = presetById(presetId)
     try {
-      await bridge.addToQueue([{ url: m.url, title: m.pageTitle || hostOf(m.pageUrl), ...requestFor(preset, { maxHeight: settings.defaultHeight, codec: settings.defaultCodec }), referer: m.pageUrl, fromBrowser: true, sourceKind: m.kind }])
-      notify("ダウンロードを始めました")
+      await bridge.addToQueue([{ url: m.url, title: m.pageTitle || hostOf(m.pageUrl), ...requestFor(preset, { maxHeight: settings.defaultHeight, codec: settings.defaultCodec }), referer: m.pageUrl, fromBrowser: true, sourceKind: m.kind, via }])
+      notify(via === "record" ? "再生しながら記録を始めました。保存が終わるまでページを開いたままにしてください" : "ダウンロードを始めました")
     } catch (err) {
       notify(err instanceof Error ? err.message : String(err), "error")
     }
@@ -70,7 +70,7 @@ export function FindPage({ settings, onAnalyze }: { settings: Settings; onAnalyz
           <HelpButton
             title="見つける"
             sections={[
-              { title: "使い方", items: ["ページを Downlee 専用のブラウザで開き、動画を再生してください。ページが読み込んだ動画・音声がここに並びます。", "［保存］で選んだ形式で保存します。［読み込む］では画質を選べます。", "HLS・DASH の容量に付く「約」は、画質と長さからの見積もりです。", "サイトに拒まれて保存できないときは、専用ブラウザのページから直接取り直します（HLS・動画ファイル）。保存が終わるまで、そのページを開いたままにしてください。", "それでも拒まれる HLS は、ページを読み直して最高画質・速めの再生で流し、プレーヤーが受け取ったデータをそのまま保存します（画質は落ちません）。", "［このページを読み込む］は、開いているページそのものを［ダウンロード］で読み込みます。"] },
+              { title: "使い方", items: ["ページを Downlee 専用のブラウザで開き、動画を再生してください。ページが読み込んだ動画・音声がここに並びます。", "［保存］で選んだ形式で保存します。［読み込む］では画質を選べます。", "HLS・DASH の容量に付く「約」は、画質と長さからの見積もりです。", "サイトに拒まれて保存できないときは、専用ブラウザのページから直接取り直します（HLS・動画ファイル）。保存が終わるまで、そのページを開いたままにしてください。", "それでも拒まれる HLS は、ページを読み直して最高画質・速めの再生で流し、プレーヤーが受け取ったデータをそのまま保存します（画質は落ちません）。", "［録画］で、最初からこの方法を選べます。上の赤い丸は、開いているページを丸ごと録画します。", "［このページを読み込む］は、開いているページそのものを［ダウンロード］で読み込みます。"] },
               { title: "ログインが必要なサイト", items: ["専用ブラウザでログインしておくと、そのログイン状態でダウンロードします。", "ログイン情報は Downlee の中だけに保存され、ふだんのブラウザとは分かれています。［設定］から消せます。"] },
               { title: "広告", items: ["専用ブラウザでは広告と追跡をブロックし、動画広告らしいものは隠します（［設定］で切り替え）。", "ほかのページで見つかったものと広告らしいものは［すべて］で表示します。", "ブラウザの拡張機能（展開済みのフォルダ）も［設定］から入れられます。"] },
               { title: "見つからないとき", items: ["一度再生を始めると見つかることがあります。", "それでも出ないときは［このページを読み込む］で、ページごと読み込めます。", "［すべて］を押すと、広告と判定して隠したものも表示します。", "DRM（著作権保護）がかかった動画は再生もダウンロードもできません。", "除外するサイトは［設定］で指定できます。"] },
@@ -107,6 +107,9 @@ export function FindPage({ settings, onAnalyze }: { settings: Settings; onAnalyz
               <Search />
               このページを読み込む
             </Button>
+            <IconButton label="このページを録画（再生しながら記録）" disabled={!state.url} onClick={() => state.url && void download({ url: state.url, pageUrl: state.url, pageTitle: state.title ?? "", kind: "hls" }, "record")}>
+              <CircleDot className="text-destructive" />
+            </IconButton>
             <IconButton label="専用ブラウザを閉じる" onClick={() => void bridge.controlBrowser("close")}>
               <X />
             </IconButton>
@@ -169,6 +172,12 @@ export function FindPage({ settings, onAnalyze }: { settings: Settings; onAnalyz
                   <Button size="sm" variant="ghost" onClick={() => onAnalyze(m.url, { fromBrowser: true, referer: m.pageUrl })}>
                     読み込む
                   </Button>
+                  {m.kind === "hls" && (
+                    <Button size="sm" variant="ghost" onClick={() => void download(m, "record")} title="再生しながら記録（最高画質）">
+                      <CircleDot className="text-destructive" />
+                      録画
+                    </Button>
+                  )}
                   <Button size="sm" onClick={() => void download(m)}>
                     <Download />
                     保存
