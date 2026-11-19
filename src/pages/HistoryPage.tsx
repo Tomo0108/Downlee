@@ -1,10 +1,9 @@
 import { Copy, Download, FolderOpen, History, Play, Search, Trash2, X } from "lucide-react"
 import { useEffect, useMemo, useState } from "react"
 import { HelpButton } from "@/components/HelpButton"
-import { EmptyState, IconButton, Thumb, useNotice } from "@/components/common"
+import { IconButton, ListFrame, Thumb, useNotice } from "@/components/common"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Card } from "@/components/ui/card"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { bridge } from "@/lib/bridge"
@@ -69,8 +68,7 @@ export function HistoryPage() {
           </div>
         )}
 
-        {shown.length ? (
-          <Card className="p-1.5">
+        <ListFrame empty={!shown.length} icon={<History className="size-5" />} emptyTitle={items.length ? "見つかりません" : "保存したものがここに並びます"}>
             <ul className="flex flex-col gap-0.5">
               {shown.map((h) => {
                 const file = h.files[h.files.length - 1]
@@ -120,10 +118,7 @@ export function HistoryPage() {
                 )
               })}
             </ul>
-          </Card>
-        ) : (
-          <EmptyState icon={<History className="size-5" />} title={items.length ? "見つかりません" : "保存したものがここに並びます"} />
-        )}
+        </ListFrame>
       </div>
 
       <Dialog open={confirm} onOpenChange={setConfirm}>

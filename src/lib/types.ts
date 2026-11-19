@@ -35,6 +35,8 @@ export interface Settings {
   autoUpdateYtdlp: boolean
   extraArgs: string
   blockedDomains: string
+  adBlock: boolean
+  extensions: string[]
 }
 
 export interface FormatInfo {
@@ -206,6 +208,14 @@ export interface BrowserState {
   loading?: boolean
 }
 
+export interface ExtensionInfo {
+  path: string
+  name: string
+  version: string | null
+  loaded: boolean
+  error: string | null
+}
+
 export interface LocalFile {
   path: string
   name: string
@@ -258,6 +268,9 @@ export interface DownleeBridge {
   listFound(): Promise<FoundMedia[]>
   clearFound(): Promise<void>
   clearBrowserData(): Promise<void>
+  listExtensions(): Promise<ExtensionInfo[]>
+  addExtension(): Promise<{ settings: Settings; extensions: ExtensionInfo[] } | null>
+  removeExtension(dir: string): Promise<{ settings: Settings; extensions: ExtensionInfo[] }>
   onFound(cb: (items: FoundMedia[]) => void): Unsub
   onBrowserState(cb: (s: BrowserState) => void): Unsub
 }

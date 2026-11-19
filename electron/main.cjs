@@ -11,6 +11,7 @@ const { createStore } = require("./store.cjs")
 const { createTools } = require("./tools.cjs")
 const { DownloadManager } = require("./manager.cjs")
 const { createSniffer } = require("./sniffer.cjs")
+const { createAdblock } = require("./adblock.cjs")
 const ytdlp = require("./ytdlp.cjs")
 
 const IS_WIN = process.platform === "win32"
@@ -266,9 +267,10 @@ function registerIpc() {
 
   handle("settings:get", () => store.getSettings())
   handle("settings:defaults", () => store.defaults)
-  handle("settings:set", (patch) => {
+  handle("settings:set", async (patch) => {
     const next = store.setSettings(patch)
     manager.pump()
+    if (patch && ("adBlock" in patch || "extensions" in patch)) await sniffer.applySettings().catch(() => undefined)
     return next
   })
   handle("settings:pick-folder", async () => {
@@ -350,6 +352,22 @@ function registerIpc() {
   handle("browser:list", () => sniffer.list())
   handle("browser:clear", () => sniffer.clear())
   handle("browser:clear-data", () => sniffer.clearData())
+  handle("browser:extensions", () => sniffer.extensions())
+  handle("browser:add-extension", async () => {
+    const r = await dialog.showOpenDialog(mainWindow, { title: "拡張機能のフォルダを選ぶ（manifest.json があるフォルダ）", properties: ["openDirectory"] })
+    if (r.canceled || !r.filePaths[0]) return null
+    const dir = r.filePaths[0]
+    if (!fs.existsSync(path.join(dir, "manifest.json"))) throw new Error("manifest.json がないフォルダです。展開済みの拡張機能のフォルダを選んでください。")
+    const list = store.getSettings().extensions
+    store.setSettings({ extensions: [...list.filter((p) => p !== dir), dir] })
+    await sniffer.applySettings()
+    return { settings: store.getSettings(), extensions: sniffer.extensions() }
+  })
+  handle("browser:remove-extension", async (dir) => {
+    store.setSettings({ extensions: store.getSettings().extensions.filter((p) => p !== dir) })
+    await sniffer.applySettings()
+    return { settings: store.getSettings(), extensions: sniffer.extensions() }
+  })
 }
 
 app.whenReady().then(() => {
@@ -364,6 +382,8 @@ app.whenReady().then(() => {
     onState: (state) => send("browser:state", state),
     iconPath: iconPath(),
     randomUUID,
+    // Chromium の通信（OS のプロキシ設定に従う）で取り、だめなら Node の fetch で取り直す
+    adblock: createAdblock({ userData, fetchImpl: (url, init) => net.fetch(url, init).catch(() => fetch(url, init)) }),
   })
   const cookieFiles = new Map()
   manager = new DownloadManager({

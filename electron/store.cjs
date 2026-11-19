@@ -36,11 +36,13 @@ function defaultSettings(downloadsDir) {
     autoUpdateYtdlp: true,
     extraArgs: "",
     blockedDomains: "",
+    adBlock: true,
+    extensions: [],
   }
 }
 
 const STRING_KEYS = ["outputDir", "defaultPreset", "defaultCodec", "filenameTemplate", "playlistTemplate", "subtitleLangs", "mp3Bitrate", "cookiesFromBrowser", "proxy", "rateLimit", "extraArgs", "blockedDomains"]
-const BOOL_KEYS = ["subtitles", "autoSubtitles", "embedSubtitles", "embedThumbnail", "embedMetadata", "embedChapters", "writeThumbnail", "sponsorBlockRemove", "overwrite", "clipboardWatch", "quickMode", "notifyOnDone", "autoUpdateYtdlp"]
+const BOOL_KEYS = ["subtitles", "autoSubtitles", "embedSubtitles", "embedThumbnail", "embedMetadata", "embedChapters", "writeThumbnail", "sponsorBlockRemove", "overwrite", "clipboardWatch", "quickMode", "notifyOnDone", "autoUpdateYtdlp", "adBlock"]
 const BROWSERS = ["", "chrome", "edge", "firefox", "brave", "opera", "vivaldi", "chromium", "whale"]
 
 /** 画面から来た設定を、決まった型・範囲に直してから保存する */
@@ -53,6 +55,7 @@ function normalizeSettings(input, defaults) {
   out.maxConcurrent = int(src.maxConcurrent, 1, 8, defaults.maxConcurrent)
   out.concurrentFragments = int(src.concurrentFragments, 1, 16, defaults.concurrentFragments)
   out.defaultHeight = int(src.defaultHeight, 0, 4320, defaults.defaultHeight)
+  out.extensions = Array.isArray(src.extensions) ? [...new Set(src.extensions.filter((x) => typeof x === "string" && x.trim()).map((x) => x.slice(0, 1000)))].slice(0, 20) : [...defaults.extensions]
   if (!BROWSERS.includes(out.cookiesFromBrowser)) out.cookiesFromBrowser = ""
   if (!out.outputDir.trim()) out.outputDir = defaults.outputDir
   if (!/^\d+(\.\d+)?[KMG]?$/i.test(out.rateLimit.trim())) out.rateLimit = ""

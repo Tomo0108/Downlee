@@ -13,6 +13,8 @@ test("設定は型と範囲を直してから使う", () => {
   assert.equal(s.rateLimit, "")
   assert.equal(s.subtitles, false)
   assert.equal(s.outputDir, d.outputDir)
+  assert.equal(s.adBlock, true)
+  assert.deepEqual(normalizeSettings({ extensions: ["C:\\ext", "C:\\ext", 3, ""] }, d).extensions, ["C:\\ext"])
 })
 
 test("設定と履歴を保存して読み直す", () => {

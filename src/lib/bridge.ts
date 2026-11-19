@@ -44,6 +44,8 @@ function createMockBridge(): DownleeBridge {
     autoUpdateYtdlp: true,
     extraArgs: "",
     blockedDomains: "",
+    adBlock: true,
+    extensions: [],
   }
   const defaults = { ...settings }
   let jobs: Job[] = []
@@ -200,6 +202,9 @@ function createMockBridge(): DownleeBridge {
       subs.found.forEach((cb) => cb(found))
     },
     clearBrowserData: ok,
+    listExtensions: async () => [],
+    addExtension: async () => null,
+    removeExtension: async () => ({ settings, extensions: [] }),
     onFound: sub(subs.found),
     onBrowserState: sub(subs.state),
   }

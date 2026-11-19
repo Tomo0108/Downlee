@@ -1,7 +1,7 @@
 import { ArrowLeft, ArrowRight, Download, Globe, Loader2, RotateCw, Radar, Search, Trash2, X } from "lucide-react"
 import { type FormEvent, useEffect, useState } from "react"
 import { HelpButton } from "@/components/HelpButton"
-import { EmptyState, IconButton, useNotice } from "@/components/common"
+import { IconButton, ListFrame, useNotice } from "@/components/common"
 import { PresetMenu } from "@/components/PresetMenu"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -52,7 +52,12 @@ export function FindPage({ settings, onAnalyze }: { settings: Settings; onAnalyz
     }
   }
 
-  const list = [...found].reverse()
+  // ふだんは開いているページで見つかったものだけを出す（ほかのページの分は［すべてのページ］で見る）
+  const [allPages, setAllPages] = useState(false)
+  const pageKey = (u?: string) => (u ?? "").split("#")[0]
+  const onPage = state.open && state.url ? found.filter((m) => pageKey(m.pageUrl) === pageKey(state.url)) : found
+  const list = [...(allPages ? found : onPage)].reverse()
+  const hidden = found.length - onPage.length
 
   return (
     <div className="h-full overflow-y-auto">
@@ -64,6 +69,7 @@ export function FindPage({ settings, onAnalyze }: { settings: Settings; onAnalyz
             sections={[
               { title: "使い方", items: ["ページを Downlee 専用のブラウザで開き、動画を再生してください。ページが読み込んだ動画・音声がここに並びます。", "［保存］で選んだ形式で保存します。［読み込む］では画質を選べます。", "［このページを読み込む］は、開いているページそのものを［ダウンロード］で読み込みます。"] },
               { title: "ログインが必要なサイト", items: ["専用ブラウザでログインしておくと、そのログイン状態でダウンロードします。", "ログイン情報は Downlee の中だけに保存され、ふだんのブラウザとは分かれています。［設定］から消せます。"] },
+              { title: "広告", items: ["専用ブラウザでは広告と追跡をブロックし、動画広告は一覧に出しません（［設定］で切り替え）。", "ほかのページで見つかったものは隠しています。［すべてのページ］で表示します。", "ブラウザの拡張機能（展開済みのフォルダ）も［設定］から入れられます。"] },
               { title: "見つからないとき", items: ["一度再生を始めると見つかることがあります。", "DRM（著作権保護）がかかった動画は再生もダウンロードもできません。", "除外するサイトは［設定］で指定できます。"] },
               { title: "操作", items: ["専用ブラウザでは Alt+← で戻る、Alt+→ で進む、F5 で読み直しです。"] },
             ]}
@@ -108,9 +114,14 @@ export function FindPage({ settings, onAnalyze }: { settings: Settings; onAnalyz
           <div className="mb-1 flex items-center gap-2 px-1">
             <h2 className="text-sm font-semibold">
               見つかったメディア
-              {found.length > 0 && <span className="ml-2 font-normal text-muted-foreground tabular-nums">{found.length}</span>}
+              {list.length > 0 && <span className="ml-2 font-normal text-muted-foreground tabular-nums">{list.length}</span>}
             </h2>
             <div className="ml-auto flex items-center gap-1">
+              {(hidden > 0 || allPages) && (
+                <Button size="sm" variant="ghost" className="text-muted-foreground" aria-pressed={allPages} onClick={() => setAllPages((v) => !v)}>
+                  {allPages ? "このページだけ" : `すべてのページ（+${hidden}）`}
+                </Button>
+              )}
               <PresetMenu value={presetId} onChange={setPresetId} size="sm" className="w-28" />
               {found.length > 0 && (
                 <IconButton label="一覧を消す" onClick={() => void bridge.clearFound()}>
@@ -119,34 +130,30 @@ export function FindPage({ settings, onAnalyze }: { settings: Settings; onAnalyz
               )}
             </div>
           </div>
-          {list.length ? (
-            <Card className="p-1.5">
-              <ul className="flex flex-col gap-0.5">
-                {list.map((m) => (
-                  <li key={m.id} className="flex items-center gap-3 rounded-lg px-3 py-2.5 hover:bg-accent/60">
-                    <Badge variant="outline" className="w-14 shrink-0 justify-center text-[11px]">
-                      {KIND_LABEL[m.kind]}
-                    </Badge>
-                    <div className="min-w-0 flex-1">
-                      <div className="truncate text-sm font-medium">{m.pageTitle || hostOf(m.pageUrl)}</div>
-                      <div className="truncate text-xs text-muted-foreground" title={m.url}>
-                        {[formatBytes(m.size), hostOf(m.url), m.url.split(/[?#]/)[0].split("/").pop()].filter(Boolean).join(" · ")}
-                      </div>
+          <ListFrame empty={!list.length} icon={<Radar className="size-5" />} emptyTitle={found.length ? "このページではまだ見つかっていません" : state.open ? "ページで動画を再生してください" : "ページを開くと、再生される動画がここに並びます"}>
+            <ul className="flex flex-col gap-0.5">
+              {list.map((m) => (
+                <li key={m.id} className="flex items-center gap-3 rounded-lg px-3 py-2.5 hover:bg-accent/60">
+                  <Badge variant="outline" className="w-14 shrink-0 justify-center text-[11px]">
+                    {KIND_LABEL[m.kind]}
+                  </Badge>
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-sm font-medium">{m.pageTitle || hostOf(m.pageUrl)}</div>
+                    <div className="truncate text-xs text-muted-foreground" title={m.url}>
+                      {[formatBytes(m.size), hostOf(m.url), m.url.split(/[?#]/)[0].split("/").pop()].filter(Boolean).join(" · ")}
                     </div>
-                    <Button size="sm" variant="ghost" onClick={() => onAnalyze(m.url, { fromBrowser: true, referer: m.pageUrl })}>
-                      読み込む
-                    </Button>
-                    <Button size="sm" onClick={() => void download(m)}>
-                      <Download />
-                      保存
-                    </Button>
-                  </li>
-                ))}
-              </ul>
-            </Card>
-          ) : (
-            <EmptyState icon={<Radar className="size-5" />} title={state.open ? "ページで動画を再生してください" : "ページを開くと、再生される動画がここに並びます"} />
-          )}
+                  </div>
+                  <Button size="sm" variant="ghost" onClick={() => onAnalyze(m.url, { fromBrowser: true, referer: m.pageUrl })}>
+                    読み込む
+                  </Button>
+                  <Button size="sm" onClick={() => void download(m)}>
+                    <Download />
+                    保存
+                  </Button>
+                </li>
+              ))}
+            </ul>
+          </ListFrame>
         </section>
       </div>
     </div>

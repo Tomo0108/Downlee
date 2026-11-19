@@ -1,4 +1,4 @@
-import { FolderOpen, Loader2, Monitor, Moon, RefreshCw, Settings as SettingsIcon, Sun, Wrench } from "lucide-react"
+import { FolderOpen, Loader2, Monitor, Moon, Plus, Puzzle, RefreshCw, Settings as SettingsIcon, Sun, Wrench, X } from "lucide-react"
 import { type ReactNode, useEffect, useState } from "react"
 import { HelpButton } from "@/components/HelpButton"
 import { NativeSelect, ProgressBar, SettingRow, useNotice } from "@/components/common"
@@ -12,7 +12,7 @@ import { Switch } from "@/components/ui/switch"
 import { bridge } from "@/lib/bridge"
 import { formatBytes } from "@/lib/format"
 import { CODECS, HEIGHTS, heightLabel } from "@/lib/presets"
-import type { Codec, Settings, ThemePreference, ToolsProgress, ToolsStatus } from "@/lib/types"
+import type { Codec, ExtensionInfo, Settings, ThemePreference, ToolsProgress, ToolsStatus } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
 const SELECTED = "border-primary bg-primary-subtle text-foreground dark:border-primary dark:bg-primary-subtle dark:hover:bg-primary-subtle"
@@ -238,6 +238,13 @@ export function SettingsPage({ settings, onChange, theme, setTheme }: { settings
           </SettingRow>
         </Section>
 
+        <Section title="専用ブラウザ（見つける）">
+          <SettingRow label="広告をブロック" hint={["専用ブラウザで広告と追跡をブロックします（EasyList などのリスト。7 日ごとに更新）。", "動画広告などが［見つかったメディア］に並ばなくなります。", "ページが正しく動かないときはオフにしてください。"]}>
+            {toggle("adBlock")}
+          </SettingRow>
+          <ExtensionsRow onSettings={(next) => onChange({ extensions: next.extensions })} />
+        </Section>
+
         <Section title="通知と便利機能">
           <SettingRow label="コピーした URL を知らせる" hint={["動画の URL をコピーすると、［ダウンロード］の入力欄の下に出します。押すとすぐ読み込みます。"]}>
             {toggle("clipboardWatch")}
@@ -306,6 +313,68 @@ export function SettingsPage({ settings, onChange, theme, setTheme }: { settings
         <Separator className="my-2" />
         <p className="text-center text-xs text-muted-foreground">Downlee ver.{version}</p>
       </div>
+    </div>
+  )
+}
+
+/** 専用ブラウザに入れる拡張機能（展開済みのフォルダ） */
+function ExtensionsRow({ onSettings }: { onSettings: (s: Settings) => void }) {
+  const notify = useNotice()
+  const [list, setList] = useState<ExtensionInfo[]>([])
+  useEffect(() => {
+    void bridge.listExtensions().then(setList)
+  }, [])
+  const run = async (p: Promise<{ settings: Settings; extensions: ExtensionInfo[] } | null>) => {
+    try {
+      const r = await p
+      if (!r) return
+      setList(r.extensions)
+      onSettings(r.settings)
+      const bad = r.extensions.find((e) => e.error)
+      if (bad) notify(`${bad.name} を読み込めませんでした：${bad.error}`, "error")
+    } catch (e) {
+      notify(e instanceof Error ? e.message.replace(/^Error invoking remote method '[^']+': (Error: )?/, "") : String(e), "error")
+    }
+  }
+  return (
+    <div className="py-2">
+      <SettingRow
+        label="拡張機能"
+        hint={[
+          "専用ブラウザに Chrome の拡張機能を入れます。展開済みの拡張機能のフォルダ（manifest.json があるフォルダ）を選んでください。",
+          "Chrome ウェブストアから直接は入れられません。Electron で動かない機能がある拡張機能もあります。",
+          "広告ブロックは［広告をブロック］だけで足ります。uBlock Origin などを使いたいときに入れてください。",
+        ]}
+        className="py-0"
+      >
+        <Button size="sm" variant="outline" onClick={() => void run(bridge.addExtension())}>
+          <Plus />
+          追加
+        </Button>
+      </SettingRow>
+      {list.length > 0 && (
+        <ul className="mt-1 flex flex-col gap-1">
+          {list.map((e) => (
+            <li key={e.path} className="flex items-center gap-2 rounded-md bg-muted/50 px-3 py-1.5 text-sm">
+              <Puzzle className="size-4 shrink-0 text-muted-foreground" />
+              <span className="min-w-0 flex-1 truncate" title={e.path}>
+                {e.name}
+                {e.version && <span className="ml-2 text-xs text-muted-foreground">{e.version}</span>}
+              </span>
+              {e.loaded ? (
+                <Badge className="bg-[var(--semantic-success-bg)] text-[var(--semantic-success-fg)]">有効</Badge>
+              ) : (
+                <Badge className="bg-[var(--semantic-danger-bg)] text-[var(--semantic-danger-fg)]" title={e.error ?? undefined}>
+                  読み込めません
+                </Badge>
+              )}
+              <Button size="icon-xs" variant="ghost" aria-label={`${e.name} を外す`} onClick={() => void run(bridge.removeExtension(e.path))}>
+                <X />
+              </Button>
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   )
 }

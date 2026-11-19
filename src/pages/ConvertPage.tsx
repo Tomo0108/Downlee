@@ -2,7 +2,7 @@ import { FileVideo, Plus, Repeat, Trash2, X } from "lucide-react"
 import { type DragEvent, useState } from "react"
 import { HelpButton } from "@/components/HelpButton"
 import { JobList } from "@/components/JobList"
-import { EmptyState, IconButton, useNotice } from "@/components/common"
+import { IconButton, ListFrame, useNotice } from "@/components/common"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
@@ -142,13 +142,9 @@ export function ConvertPage({ jobs }: { jobs: Job[] }) {
               </IconButton>
             )}
           </div>
-          {converts.length ? (
-            <Card className="p-1.5">
-              <JobList jobs={converts} />
-            </Card>
-          ) : (
-            <EmptyState icon={<Repeat className="size-5" />} title="変換したファイルがここに並びます" />
-          )}
+          <ListFrame empty={!converts.length} icon={<Repeat className="size-5" />} emptyTitle="変換したファイルがここに並びます">
+            <JobList jobs={converts} />
+          </ListFrame>
         </section>
       </div>
     </div>

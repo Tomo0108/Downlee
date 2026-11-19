@@ -60,6 +60,9 @@ contextBridge.exposeInMainWorld("downlee", {
   listFound: () => ipcRenderer.invoke("browser:list"),
   clearFound: () => ipcRenderer.invoke("browser:clear"),
   clearBrowserData: () => ipcRenderer.invoke("browser:clear-data"),
+  listExtensions: () => ipcRenderer.invoke("browser:extensions"),
+  addExtension: () => ipcRenderer.invoke("browser:add-extension"),
+  removeExtension: (dir) => ipcRenderer.invoke("browser:remove-extension", dir),
   onFound: on("browser:found"),
   onBrowserState: on("browser:state"),
 })

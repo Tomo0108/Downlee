@@ -132,10 +132,21 @@ export function NoticeProvider({ children }: { children: ReactNode }) {
 /** 空の状態（次の一手を短く出す） */
 export function EmptyState({ icon, title, children }: { icon: ReactNode; title: string; children?: ReactNode }) {
   return (
-    <div className="flex flex-col items-center justify-center gap-3 px-6 py-14 text-center">
+    <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 py-14 text-center">
       <div className="flex size-12 items-center justify-center rounded-full bg-primary-subtle text-primary">{icon}</div>
       <div className="text-sm font-medium text-muted-foreground">{title}</div>
       {children}
+    </div>
+  )
+}
+
+/**
+ * 一覧の枠。項目がまだないときも同じ大きさの枠を先に出し、空の案内を枠の中に置く（項目だけが浮かないようにする）。
+ */
+export function ListFrame({ empty, icon, emptyTitle, children, className }: { empty: boolean; icon: ReactNode; emptyTitle: string; children?: ReactNode; className?: string }) {
+  return (
+    <div className={cn("flex min-h-72 flex-col rounded-2xl border border-border/60 bg-card p-1.5 shadow-card", className)}>
+      {empty ? <EmptyState icon={icon} title={emptyTitle} /> : children}
     </div>
   )
 }

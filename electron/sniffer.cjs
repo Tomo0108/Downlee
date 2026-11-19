@@ -62,7 +62,7 @@ function toNetscapeCookies(cookies) {
   return lines.join("\n") + "\n"
 }
 
-function createSniffer({ BrowserWindow, session, getSettings, onFound, onState, iconPath, randomUUID }) {
+function createSniffer({ BrowserWindow, session, getSettings, onFound, onState, iconPath, randomUUID, adblock }) {
   const ses = session.fromPartition("persist:downlee-browser")
   let win = null
   const found = new Map()
@@ -81,6 +81,8 @@ function createSniffer({ BrowserWindow, session, getSettings, onFound, onState, 
     if (!hit) return
     const pageUrl = win.webContents.getURL()
     if (isBlocked(details.url, getSettings().blockedDomains) || isBlocked(pageUrl, getSettings().blockedDomains)) return
+    // 広告のリストに当たるメディア（動画広告など）は並べない
+    if (getSettings().adBlock && adblock?.isAd(details.url, pageUrl)) return
     const key = mediaKey(details.url)
     const prev = found.get(key)
     const item = {
@@ -103,7 +105,44 @@ function createSniffer({ BrowserWindow, session, getSettings, onFound, onState, 
     return { open: true, url: wc.getURL(), title: wc.getTitle(), canGoBack: wc.navigationHistory.canGoBack(), canGoForward: wc.navigationHistory.canGoForward(), loading: wc.isLoading() }
   }
 
-  function open(url) {
+  /** 広告ブロックと拡張機能を設定に合わせる。戻り値は拡張機能ごとの状態 */
+  async function applySettings() {
+    const s = getSettings()
+    await adblock?.apply(ses, s.adBlock !== false)
+    return syncExtensions(Array.isArray(s.extensions) ? s.extensions : [])
+  }
+
+  const extErrors = new Map()
+  async function syncExtensions(paths) {
+    const api = ses.extensions ?? ses
+    const loaded = api.getAllExtensions()
+    for (const ext of loaded) if (!paths.includes(ext.path)) api.removeExtension(ext.id)
+    for (const p of paths) {
+      if (loaded.some((e) => e.path === p)) continue
+      try {
+        await api.loadExtension(p, { allowFileAccess: false })
+        extErrors.delete(p)
+      } catch (e) {
+        extErrors.set(p, e instanceof Error ? e.message : String(e))
+      }
+    }
+    return extensions()
+  }
+
+  function extensions() {
+    const api = ses.extensions ?? ses
+    const loaded = api.getAllExtensions()
+    const paths = Array.isArray(getSettings().extensions) ? getSettings().extensions : []
+    return paths.map((p) => {
+      const e = loaded.find((x) => x.path === p)
+      return { path: p, name: e?.name ?? p.split(/[\\/]/).pop(), version: e?.version ?? null, loaded: Boolean(e), error: e ? null : extErrors.get(p) ?? null }
+    })
+  }
+
+  let ready = null
+  async function open(url) {
+    ready ??= applySettings().catch(() => undefined)
+    await ready
     const target = normalizeUrl(url)
     if (win && !win.isDestroyed()) {
       if (target) void win.loadURL(target)
@@ -194,7 +233,7 @@ function createSniffer({ BrowserWindow, session, getSettings, onFound, onState, 
     await ses.clearCache()
   }
 
-  return { open, control, state, list, clear, cookiesFor, clearData, userAgent: () => ses.getUserAgent() }
+  return { open, control, state, list, clear, cookiesFor, clearData, applySettings, extensions, userAgent: () => ses.getUserAgent() }
 }
 
 function normalizeUrl(input) {

@@ -4,7 +4,7 @@ import { HelpButton } from "@/components/HelpButton"
 import { JobList } from "@/components/JobList"
 import { MediaCard } from "@/components/MediaCard"
 import { PresetMenu } from "@/components/PresetMenu"
-import { EmptyState, IconButton, useNotice } from "@/components/common"
+import { IconButton, ListFrame, useNotice } from "@/components/common"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
@@ -12,7 +12,6 @@ import { bridge } from "@/lib/bridge"
 import { extractUrls, hostOf } from "@/lib/format"
 import { presetById, requestFor } from "@/lib/presets"
 import type { Job, JobRequest, MediaInfo, Settings } from "@/lib/types"
-import { cn } from "@/lib/utils"
 
 export interface AnalyzeRequest {
   url: string
@@ -234,13 +233,9 @@ export function DownloadPage({ settings, jobs, request, onSettings }: { settings
               )}
             </div>
           </div>
-          {ordered.length ? (
-            <Card className={cn("p-1.5")}>
-              <JobList jobs={ordered} />
-            </Card>
-          ) : (
-            <EmptyState icon={<ArrowDownToLine className="size-5" />} title="URL を貼り付けると、ここに表示されます" />
-          )}
+          <ListFrame empty={!ordered.length} icon={<ArrowDownToLine className="size-5" />} emptyTitle="URL を貼り付けると、ここに表示されます">
+            <JobList jobs={ordered} />
+          </ListFrame>
         </section>
       </div>
     </div>
