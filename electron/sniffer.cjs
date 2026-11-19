@@ -4,6 +4,7 @@
  * DRM で保護されたストリーム（EME / Widevine）は再生もダウンロードもしない。
  */
 const { parseHls, parseDash, estimateSize } = require("./manifest.cjs")
+const { startCapture, PLAY_SCRIPT, STATE_SCRIPT } = require("./capture.cjs")
 
 const MEDIA_EXT = /\.(m3u8|mpd|mp4|m4v|webm|mov|mkv|flv|f4v|ogv|mp3|m4a|aac|ogg|oga|opus|wav|flac)(?:$|[?#])/i
 const SEGMENT = /\.(ts|m4s|aac|vtt|webvtt|key)(?:$|[?#])|\/(seg|segment|frag|fragment|chunk)[-_]?\d+/i
@@ -400,7 +401,8 @@ function createSniffer({ BrowserWindow, session, nativeImage, getSettings, onFou
       title: "Downlee ブラウザ",
       icon: iconPath,
       autoHideMenuBar: true,
-      webPreferences: { session: ses, contextIsolation: true, sandbox: true, nodeIntegration: false, spellcheck: false },
+      // 録画中に窓が隠れても再生を止めない
+      webPreferences: { session: ses, contextIsolation: true, sandbox: true, nodeIntegration: false, spellcheck: false, backgroundThrottling: false },
     })
     win.setMenuBarVisibility(false)
     const wc = win.webContents
@@ -500,7 +502,9 @@ function createSniffer({ BrowserWindow, session, nativeImage, getSettings, onFou
     const code = `(async () => {
       const opts = ${JSON.stringify(range ? { headers: { Range: range } } : {})}
       let r
-      try { r = await fetch(${JSON.stringify(url)}, opts) } catch (e) { r = await fetch(${JSON.stringify(url)}, { ...opts, credentials: "include" }) }
+      try { r = await fetch(${JSON.stringify(url)}, opts) } catch (e) { r = null }
+      // 拒まれたら cookie を付けて取り直す（プレーヤーが cookie 付きで取っている配信）
+      if (!r || !r.ok) { try { r = await fetch(${JSON.stringify(url)}, { ...opts, credentials: "include" }) } catch (e) { if (!r) throw e } }
       if (!r.ok) return { status: r.status }
       const b = new Uint8Array(await r.arrayBuffer())
       let s = ""
@@ -527,6 +531,49 @@ function createSniffer({ BrowserWindow, session, nativeImage, getSettings, onFou
     const res = await get(url, { url: frameUrl ?? url, pageUrl: /^https?:/i.test(ref || "") ? ref : win.webContents.getURL() }, { headers: range ? { Range: range } : {} })
     if (!res.ok) return { status: res.status || lastStatus, data: null }
     return { status: res.status, data: Buffer.from(await res.arrayBuffer()), contentType: res.headers.get("content-type"), contentRange: res.headers.get("content-range") }
+  }
+
+  /**
+   * 再生しながら記録：通信の写し取りを始めてからページを読み直し、いちばん大きい動画を再生させる。
+   * 戻り値：{ stop, state }（state はいちばん大きい動画の再生位置。DRM なら { drm: true }）
+   */
+  async function captureAndPlay(opts, onWaiting) {
+    if (!win || win.isDestroyed()) throw new Error("専用ブラウザが閉じています。［見つける］で動画のページを開いたまま、もう一度保存してください。")
+    const wc = win.webContents
+    const cap = await startCapture(wc, opts)
+    try {
+      await new Promise((ok) => {
+        const t = setTimeout(ok, 20000)
+        wc.once("did-finish-load", () => {
+          clearTimeout(t)
+          ok()
+        })
+        wc.reload()
+      })
+      let frame = null
+      for (let i = 0; i < 120 && !frame; i++) {
+        for (const f of allFrames().reverse()) {
+          const r = await f.executeJavaScript(PLAY_SCRIPT, true).catch(() => "none")
+          if (r === "drm") throw new Error("DRM protected")
+          if (r !== "none") {
+            frame = f
+            break
+          }
+        }
+        if (!frame) {
+          if (i === 5) onWaiting?.()
+          await new Promise((ok) => setTimeout(ok, 1000))
+        }
+      }
+      if (!frame) throw new Error("ページに動画が見つかりません。専用ブラウザで動画を再生してから、もう一度保存してください。")
+      return {
+        stop: () => cap.stop(),
+        state: () => frame.executeJavaScript(STATE_SCRIPT).catch(() => null),
+      }
+    } catch (e) {
+      await cap.stop()
+      throw e
+    }
   }
 
   function isOpen() {
@@ -560,7 +607,7 @@ function createSniffer({ BrowserWindow, session, nativeImage, getSettings, onFou
     await ses.clearCache()
   }
 
-  return { open, control, state, list, clear, cookiesFor, headersFor, fetchInPage, isOpen, clearData, applySettings, extensions, userAgent: () => ses.getUserAgent() }
+  return { open, control, state, list, clear, cookiesFor, headersFor, fetchInPage, captureAndPlay, isOpen, clearData, applySettings, extensions, userAgent: () => ses.getUserAgent() }
 }
 
 function normalizeUrl(input) {

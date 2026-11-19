@@ -7,6 +7,7 @@ const fs = require("node:fs")
 const path = require("node:path")
 const { EventEmitter } = require("node:events")
 const { PassThrough } = require("node:stream")
+const { stripQuery } = require("./capture.cjs")
 
 const PROGRESS_PREFIX = "DLPROG "
 const FILE_PREFIX = "DLFILE "
@@ -138,7 +139,8 @@ function uniquePath(dir, base, ext) {
 
 /**
  * @param {{ fetchInPage: (url: string, o?: { frameUrl?: string, range?: string }) => Promise<{ status: number, data: Buffer | null, contentType?: string | null, contentRange?: string | null }>,
- *           spawnFfmpeg: (args: string[]) => any, now?: () => number }} deps
+ *           captureAndPlay?: (opts: any, onWaiting?: () => void) => Promise<{ stop: () => Promise<void>, state: () => Promise<any> }>,
+ *           spawnFfmpeg: (args: string[]) => any, now?: () => number, idleMs?: number }} deps
  */
 function createBrowserDownloader(deps) {
   const now = deps.now ?? (() => Date.now())
@@ -163,6 +165,7 @@ function createBrowserDownloader(deps) {
 
     const run = async () => {
       fs.mkdirSync(work, { recursive: true })
+      if (job.via === "record") return runRecord()
       say("[browser] ブラウザ経由で取得します")
       const kind = job.sourceKind
       if (kind === "dash" || kind === "mss") throw new Error("この形式（DASH・Smooth Streaming）はブラウザ経由の取得に対応していません。")
@@ -243,6 +246,109 @@ function createBrowserDownloader(deps) {
       }
       await Promise.all(Array.from({ length: Math.min(4, Math.max(1, Number(settings.concurrentFragments) || 4)) }, worker))
       if (aborted) throw new Error("aborted")
+      return mux(tracks.map((t) => path.join(work, t.name, "index.m3u8")))
+    }
+
+    /** 再生しながら記録：プレーヤーが受け取った断片をそのまま保存する（最高画質に固定して再生させる） */
+    async function runRecord() {
+      if (!deps.captureAndPlay) throw new Error("再生しながらの記録に対応していません。")
+      say("[record] 再生しながら記録します（最高画質）")
+      let videoUri = null
+      let audioUri = null
+      const tracks = []
+      const byUrl = new Map()
+      let total = 0
+      let done = 0
+      let bytes = 0
+      let lastNew = now()
+      const t0 = now()
+      const report = () => {
+        const secs = Math.max(0.001, (now() - t0) / 1000)
+        say(`${PROGRESS_PREFIX}downloading|${bytes}|NA|${done ? Math.round((bytes / done) * total) : "NA"}|${Math.round(bytes / secs)}|NA|NA|NA|${done}|${total}`)
+      }
+      const onMaster = (url, text) => {
+        const lines = text.split(/\r?\n/)
+        const uri = lines.filter((l) => l.trim() && !l.startsWith("#")).pop()
+        videoUri = uri ? stripQuery(resolve(uri, url)) : null
+        const a = /#EXT-X-MEDIA:[^\n]*TYPE=AUDIO[^\n]*URI="([^"]+)"/.exec(text)?.[1]
+        audioUri = a ? stripQuery(resolve(a, url)) : null
+      }
+      const onPlaylist = (url, text) => {
+        const bare = stripQuery(url)
+        if (tracks.some((t) => t.bare === bare)) return
+        const name = audioUri && bare === audioUri ? "a" : videoUri && bare === videoUri ? "v" : tracks.some((t) => t.name === "v") ? null : "v"
+        if (!name || tracks.some((t) => t.name === name)) return
+        const loc = localizeMedia(text, url)
+        if (loc.drm) {
+          drmSeen = true
+          return
+        }
+        fs.mkdirSync(path.join(work, name), { recursive: true })
+        fs.writeFileSync(path.join(work, name, "index.m3u8"), loc.playlist)
+        tracks.push({ name, bare, ...loc })
+        for (const f of loc.files) {
+          const file = path.join(work, name, f.name)
+          total++
+          if (fs.existsSync(file) && fs.statSync(file).size > 0) {
+            done++
+            bytes += fs.statSync(file).size
+            continue
+          }
+          const entry = { ...f, file }
+          for (const k of [f.url, stripQuery(f.url)]) {
+            if (!byUrl.has(k)) byUrl.set(k, [])
+            byUrl.get(k).push(entry)
+          }
+        }
+        say(`[hlsnative] Total fragments: ${total}`)
+      }
+      let drmSeen = false
+      const take = (url) => {
+        for (const k of [url, stripQuery(url)]) {
+          const list = byUrl.get(k)
+          const e = list?.find((x) => !x.written)
+          if (e) return e
+        }
+        return null
+      }
+      const onBody = (url, data) => {
+        const e = take(url)
+        if (!e || !data?.length) return
+        e.written = true
+        fs.writeFileSync(e.file, data)
+        done++
+        bytes += data.length
+        lastNew = now()
+        report()
+      }
+      const wants = (url) => Boolean(take(url))
+      const session = await deps.captureAndPlay({ maxHeight: job.maxHeight, onMaster, onPlaylist, onBody, wants }, () => say("[record] ページで動画の再生を始めてください"))
+      try {
+        const idle = deps.idleMs ?? 120_000
+        for (;;) {
+          if (aborted) throw new Error("aborted")
+          if (drmSeen) throw new Error("DRM protected")
+          if (tracks.length && done >= total) break
+          const st = await session.state()
+          if (st?.drm) throw new Error("DRM protected")
+          const ended = st?.ended === true
+          if ((ended && tracks.length) || now() - lastNew > idle) {
+            // 再生が終わった・しばらく増えない：残りはページの中から取ってみる
+            const missing = [...new Set([...byUrl.values()].flat().filter((x) => !x.written))]
+            for (const e of missing) {
+              if (aborted) throw new Error("aborted")
+              const r = await deps.fetchInPage(e.url, { frameUrl: job.url, range: e.range ?? undefined }).catch(() => null)
+              if (r?.data && r.status < 400) onBody(e.url, r.data)
+            }
+            if (done < total || !tracks.length) throw new Error(tracks.length ? `記録できなかった断片が ${total - done} 個あります。もう一度保存すると、続きから記録します。` : "再生された動画のデータを受け取れませんでした。")
+            break
+          }
+          await new Promise((r) => setTimeout(r, 1000))
+        }
+      } finally {
+        await session.stop()
+      }
+      tracks.sort((a, b) => (a.name === "v" ? -1 : 1) - (b.name === "v" ? -1 : 1))
       return mux(tracks.map((t) => path.join(work, t.name, "index.m3u8")))
     }
 
