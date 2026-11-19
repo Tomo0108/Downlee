@@ -3,6 +3,8 @@
  * 専用の保存領域（persist:downlee-browser）を使うので、ここでログインした状態はふだんのブラウザと分かれる。
  * DRM で保護されたストリーム（EME / Widevine）は再生もダウンロードもしない。
  */
+const { parseHls, parseDash, estimateSize } = require("./manifest.cjs")
+
 const MEDIA_EXT = /\.(m3u8|mpd|mp4|m4v|webm|mov|mkv|flv|f4v|ogv|mp3|m4a|aac|ogg|oga|opus|wav|flac)(?:$|[?#])/i
 const SEGMENT = /\.(ts|m4s|aac|vtt|webvtt|key)(?:$|[?#])|\/(seg|segment|frag|fragment|chunk)[-_]?\d+/i
 const MEDIA_TYPE = /^(video\/(?!mp2t)|audio\/|application\/(x-mpegurl|vnd\.apple\.mpegurl|dash\+xml|vnd\.ms-sstr\+xml))/i
@@ -46,7 +48,8 @@ function classifyResponse({ url, resourceType, contentType, contentLength, conte
   const finalKind = kind ?? (/^audio\//.test(type) || ["mp3", "m4a", "aac", "ogg", "oga", "opus", "wav", "flac"].includes(byExt) ? "audio" : "video")
   const total = /\/(\d+)\s*$/.exec(String(contentRange || ""))?.[1]
   // 分割読み込みの 1 片の大きさはファイルの大きさではない
-  const size = Number(total ?? (ranged || contentRange ? undefined : contentLength)) || null
+  // マニフェストの大きさは動画の容量ではないので出さない（あとで中身から見積もる）
+  const size = isManifest ? null : Number(total ?? (ranged || contentRange ? undefined : contentLength)) || null
   // ごく小さいファイル（広告のビーコン・効果音など）は拾わない（全体の大きさがわからない分割読み込みは拾う）
   if (!isManifest && size !== null && size < 100 * 1024) return null
   return { kind: finalKind, contentType: type || null, size, url: ranged ? stripRange(url) : url }
@@ -88,13 +91,69 @@ function toNetscapeCookies(cookies) {
   return lines.join("\n") + "\n"
 }
 
-function createSniffer({ BrowserWindow, session, getSettings, onFound, onState, iconPath, randomUUID, adblock }) {
+/** ダウンロードに引き継ぐリクエストヘッダー（cookie は別の一時ファイルで渡す。Range などは渡さない） */
+const KEEP_HEADER = /^(origin|referer|authorization|x-[\w-]+)$/i
+function pickHeaders(requestHeaders) {
+  const out = {}
+  for (const [k, v] of Object.entries(requestHeaders ?? {})) {
+    if (!KEEP_HEADER.test(k) || /^x-(client-data|requested-with)$/i.test(k)) continue
+    out[k] = String(v)
+  }
+  return out
+}
+
+/** ページの中の動画からサムネイルの候補を集める（いちばん大きく表示されている動画） */
+const SNAP_SCRIPT = `(() => {
+  const vids = [...document.querySelectorAll("video")].sort((a, b) => b.clientWidth * b.clientHeight - a.clientWidth * a.clientHeight)
+  const v = vids[0]
+  let frame = null
+  if (v && v.readyState >= 2 && v.videoWidth && v.currentTime > 0.3) {
+    try {
+      const c = document.createElement("canvas")
+      c.width = 320
+      c.height = Math.round((320 * v.videoHeight) / v.videoWidth)
+      c.getContext("2d").drawImage(v, 0, 0, c.width, c.height)
+      frame = c.toDataURL("image/jpeg", 0.8)
+    } catch {}
+  }
+  const meta = (s) => document.querySelector(s)?.content || null
+  return { area: v ? v.clientWidth * v.clientHeight : 0, frame, poster: v?.poster || null, og: meta('meta[property="og:image"]') || meta('meta[name="twitter:image"]') }
+})()`
+
+function createSniffer({ BrowserWindow, session, nativeImage, getSettings, onFound, onState, iconPath, randomUUID, adblock }) {
   const ses = session.fromPartition("persist:downlee-browser")
   let win = null
   const found = new Map()
   let pageTitle = ""
   // ページを移るたびに増える番号。SPA で URL だけ変わっても同じページの分として扱う
   let nav = 0
+  // メディアの URL ごとに、ブラウザが送ったヘッダー（Origin・Authorization など）。メモリーにだけ置く
+  const sentHeaders = new Map()
+  // 自分で調べに行く通信（容量の確認など）。一覧には出さない
+  const probing = new Set()
+  // master の HLS に含まれる画質ごとのプレイリスト。master にまとめて、別には並べない
+  const variants = new Set()
+  const thumbs = new Map()
+
+  const emit = () => onFound([...found.values()])
+
+  ses.webRequest.onSendHeaders((details) => {
+    if (!MEDIA_EXT.test(details.url) && !MANIFEST_HINT.test(details.url) && !RANGE_QUERY.test(details.url)) return
+    const h = pickHeaders(details.requestHeaders)
+    // Origin・Referer はこの段階のヘッダーに入らないので、読み込んだページ（枠）の URL から付け直す
+    if (details.referrer && /^https?:/i.test(details.referrer)) {
+      h.Referer ??= details.referrer
+      try {
+        const from = new URL(details.referrer).origin
+        if (details.resourceType === "xhr" && from !== new URL(details.url).origin) h.Origin ??= from
+      } catch {
+        /* URL でなければ付けない */
+      }
+    }
+    if (!Object.keys(h).length) return
+    sentHeaders.set(mediaKey(details.url), h)
+    if (sentHeaders.size > 500) sentHeaders.delete(sentHeaders.keys().next().value)
+  })
 
   ses.setPermissionRequestHandler((_wc, permission, cb) => cb(permission === "fullscreen"))
 
@@ -107,6 +166,7 @@ function createSniffer({ BrowserWindow, session, getSettings, onFound, onState, 
       const key = Object.keys(h).find((k) => k.toLowerCase() === name)
       return key ? [].concat(h[key])[0] : undefined
     }
+    if (probing.has(details.url)) return
     const hit = classifyResponse({ url: details.url, resourceType: details.resourceType, contentType: header("content-type"), contentLength: header("content-length"), contentRange: header("content-range"), statusCode: details.statusCode })
     if (!hit) return
     const pageUrl = win.webContents.getURL()
@@ -114,6 +174,7 @@ function createSniffer({ BrowserWindow, session, getSettings, onFound, onState, 
     // 広告のリストに当たるメディア（動画広告など）は印を付けて、ふだんは隠す（誤判定でも［すべて］で見られる）
     const ad = Boolean(getSettings().adBlock && adblock?.isAd(details.url, pageUrl))
     const key = mediaKey(hit.url)
+    if (variants.has(key)) return
     const prev = found.get(key)
     const item = {
       id: prev?.id ?? randomUUID(),
@@ -125,11 +186,155 @@ function createSniffer({ BrowserWindow, session, getSettings, onFound, onState, 
       kind: hit.kind,
       contentType: hit.contentType,
       size: hit.size ?? prev?.size ?? null,
+      sizeApprox: hit.size ? false : prev?.sizeApprox ?? false,
+      duration: prev?.duration ?? null,
+      height: prev?.height ?? null,
+      thumbnail: prev?.thumbnail ?? thumbs.get(nav)?.url ?? null,
       at: prev?.at ?? new Date().toISOString(),
     }
     found.set(key, item)
-    onFound([...found.values()])
+    emit()
+    if (!prev) void probe(key)
+    if (!item.thumbnail) scheduleThumb(nav)
   })
+
+  /* ---- 容量・長さ・画質を調べる ---- */
+
+  /**
+   * 調べるための取得。ブラウザが送ったヘッダー・cookie・Referer をそろえて Node の fetch で取る
+   * （Chromium の fetch では Referer を付けられず、Origin を付けると cookie が送られないため）。だめならセッションの fetch で取り直す。
+   */
+  async function get(url, item, init = {}) {
+    probing.add(url)
+    try {
+      const headers = { ...(sentHeaders.get(mediaKey(url)) ?? sentHeaders.get(mediaKey(item.url)) ?? {}), "User-Agent": ses.getUserAgent(), ...(init.headers ?? {}) }
+      if (!Object.keys(headers).some((k) => k.toLowerCase() === "referer") && item.pageUrl) headers.Referer = item.pageUrl
+      const cookies = await ses.cookies.get({ url }).catch(() => [])
+      if (cookies.length) headers.Cookie = cookies.map((c) => `${c.name}=${c.value}`).join("; ")
+      try {
+        return await fetch(url, { ...init, headers, signal: AbortSignal.timeout(15000) })
+      } catch {
+        const { Referer: _r, Cookie: _c, ...rest } = headers
+        return await ses.fetch(url, { ...init, headers: rest, signal: AbortSignal.timeout(15000) })
+      }
+    } finally {
+      setTimeout(() => probing.delete(url), 30000)
+    }
+  }
+
+  async function probe(key) {
+    const item = found.get(key)
+    if (!item || !ses.fetch) return
+    try {
+      let info = null
+      if (item.kind === "hls") {
+        const root = parseHls(await (await get(item.url, item)).text(), item.url)
+        if (root?.type === "master") {
+          for (const v of root.variants) {
+            const k = mediaKey(v.url)
+            variants.add(k)
+            if (found.delete(k)) emit()
+          }
+          for (const a of root.audio) variants.add(mediaKey(a))
+          const best = root.variants[0]
+          const media = parseHls(await (await get(best.url, item)).text(), best.url)
+          const duration = media?.type === "media" && !media.live ? media.duration : null
+          info = { height: best.height, duration, size: media?.bytes ?? estimateSize(best.bandwidth, duration) }
+        } else if (root?.type === "media") {
+          let size = root.bytes
+          if (!size && root.firstSegment && root.segments && !root.live) {
+            const head = await get(root.firstSegment, item, { method: "HEAD" })
+            const one = Number(head.headers.get("content-length")) || 0
+            if (one) size = one * root.segments
+          }
+          info = { duration: root.live ? null : root.duration, size }
+        }
+      } else if (item.kind === "dash") {
+        const d = parseDash(await (await get(item.url, item)).text())
+        if (d) info = { duration: d.duration, height: d.height, size: d.size }
+      } else if (item.size === null) {
+        const res = await get(item.url, item, { headers: { Range: "bytes=0-0" } })
+        const total = Number(/\/(\d+)/.exec(res.headers.get("content-range") || "")?.[1]) || null
+        void res.body?.cancel().catch(() => undefined)
+        if (total) info = { size: total, exact: true }
+      }
+      const cur = found.get(key)
+      if (!cur || !info) return
+      found.set(key, { ...cur, duration: info.duration ?? cur.duration, height: info.height ?? cur.height, size: cur.size ?? info.size ?? null, sizeApprox: cur.size ? cur.sizeApprox : Boolean(info.size && !info.exact) })
+      emit()
+    } catch (e) {
+      /* 調べられないときは容量を出さない */
+      if (process.env.DOWNLEE_DEBUG) console.error("probe", e)
+    }
+  }
+
+  /* ---- サムネイル（ページを移るごとに 1 枚） ---- */
+
+  const thumbTimers = new Map()
+  function scheduleThumb(n, attempt = 0) {
+    if (thumbTimers.has(n) || thumbs.get(n)?.strong) return
+    const delay = [1500, 5000, 12000][attempt]
+    if (delay === undefined) return
+    thumbTimers.set(n, setTimeout(() => {
+      thumbTimers.delete(n)
+      void captureThumb(n, attempt)
+    }, delay))
+  }
+
+  async function imageToDataUrl(url, pageUrl) {
+    const res = await get(url, { url, pageUrl })
+    if (!res.ok) return null
+    const img = nativeImage.createFromBuffer(Buffer.from(await res.arrayBuffer()))
+    if (img.isEmpty()) return null
+    return `data:image/jpeg;base64,${img.resize({ width: 320, quality: "good" }).toJPEG(80).toString("base64")}`
+  }
+
+  async function captureThumb(n, attempt) {
+    if (!win || win.isDestroyed() || n !== nav || !nativeImage) return
+    const wc = win.webContents
+    const pageUrl = wc.getURL()
+    const frames = wc.mainFrame?.framesInSubtree ?? [wc.mainFrame]
+    const snaps = []
+    for (const f of frames) {
+      try {
+        const r = await Promise.race([f.executeJavaScript(SNAP_SCRIPT), new Promise((ok) => setTimeout(() => ok(null), 2000))])
+        if (r) snaps.push(r)
+      } catch {
+        /* 読めない枠は飛ばす */
+      }
+    }
+    snaps.sort((a, b) => b.area - a.area)
+    let url = snaps.find((x) => x.frame)?.frame ?? null
+    let strong = Boolean(url)
+    for (const cand of [snaps.find((x) => x.poster)?.poster, snaps.find((x) => x.og)?.og]) {
+      if (url || !cand || !/^https?:/i.test(cand)) continue
+      try {
+        url = await imageToDataUrl(cand, pageUrl)
+        strong = Boolean(url)
+      } catch {
+        /* 次の候補へ */
+      }
+    }
+    // 最後の手段：ページの見た目を縮めて使う
+    if (!url && attempt >= 2 && !win.isMinimized()) {
+      const img = await wc.capturePage().catch(() => null)
+      if (img && !img.isEmpty()) url = `data:image/jpeg;base64,${img.resize({ width: 320, quality: "good" }).toJPEG(75).toString("base64")}`
+    }
+    if (n !== nav) return
+    if (url) {
+      thumbs.set(n, { url, strong })
+      if (thumbs.size > 50) thumbs.delete(thumbs.keys().next().value)
+      let changed = false
+      for (const [k, it] of found) {
+        if (it.nav === n && !it.thumbnail) {
+          found.set(k, { ...it, thumbnail: url })
+          changed = true
+        }
+      }
+      if (changed) emit()
+    }
+    if (!strong) scheduleThumb(n, attempt + 1)
+  }
 
   function state() {
     if (!win || win.isDestroyed()) return { open: false }
@@ -245,13 +450,19 @@ function createSniffer({ BrowserWindow, session, getSettings, onFound, onState, 
     onFound([])
   }
 
+  /** ダウンロードに引き継ぐヘッダー（見つけたときにブラウザが送ったもの） */
+  function headersFor(url) {
+    return { ...(sentHeaders.get(mediaKey(url)) ?? {}) }
+  }
+
   /** この URL に送られる cookie を Netscape 形式で返す（ダウンロード 1 件のための一時ファイル用） */
-  async function cookiesFor(url) {
+  async function cookiesFor(...urls) {
     try {
-      const host = new URL(url).hostname
-      const parts = host.split(".")
       const domains = new Set()
-      for (let i = 0; i < parts.length - 1; i++) domains.add(parts.slice(i).join("."))
+      for (const u of urls.filter(Boolean)) {
+        const parts = new URL(u).hostname.split(".")
+        for (let i = 0; i < parts.length - 1; i++) domains.add(parts.slice(i).join("."))
+      }
       const all = []
       for (const d of domains) all.push(...(await ses.cookies.get({ domain: d })))
       const uniq = new Map(all.map((c) => [`${c.domain}|${c.path}|${c.name}`, c]))
@@ -266,7 +477,7 @@ function createSniffer({ BrowserWindow, session, getSettings, onFound, onState, 
     await ses.clearCache()
   }
 
-  return { open, control, state, list, clear, cookiesFor, clearData, applySettings, extensions, userAgent: () => ses.getUserAgent() }
+  return { open, control, state, list, clear, cookiesFor, headersFor, clearData, applySettings, extensions, userAgent: () => ses.getUserAgent() }
 }
 
 function normalizeUrl(input) {

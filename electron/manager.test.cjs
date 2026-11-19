@@ -17,7 +17,7 @@ function fakeChild() {
   return c
 }
 
-function setup(settings = { maxConcurrent: 1 }) {
+function setup(settings = { maxConcurrent: 1 }, extra = {}) {
   const children = []
   const finished = []
   const m = new DownloadManager({
@@ -30,6 +30,8 @@ function setup(settings = { maxConcurrent: 1 }) {
     spawnFfmpeg: () => fakeChild(),
     killTree: (c) => c.finish(1),
     onFinished: (j) => finished.push(j),
+    retryDelayMs: 1,
+    ...extra,
   })
   return { m, children, finished }
 }
@@ -90,4 +92,39 @@ test("再起動後は途中のものを一時停止で戻す", () => {
   const { m } = setup()
   m.restore([{ id: "x", status: "running", progress: { percent: 40 } }, { id: "y", status: "done" }])
   assert.deepEqual(m.list().map((j) => [j.id, j.status]), [["x", "paused"]])
+})
+
+const wait = (ms) => new Promise((r) => setTimeout(r, ms))
+
+test("追加したものは待っている間も一覧に出る", () => {
+  const { m } = setup()
+  const seen = []
+  m.on("job", (j) => seen.push(j.id))
+  const added = m.add([{ url: "https://e/1" }, { url: "https://e/2" }, { url: "https://e/3" }])
+  for (const a of added) assert.ok(seen.includes(a.id))
+})
+
+test("通信が切れたら続きから自動でやり直す", async () => {
+  const { m, children } = setup()
+  const [a] = m.add([{ url: "https://e/1.m3u8" }])
+  await tick()
+  children[0].stderr.write("ERROR: Read timed out\n")
+  children[0].finish(1)
+  await wait(20)
+  assert.equal(children.length, 2)
+  assert.equal(m.get(a.id).status, "running")
+  children[1].finish(0)
+  await wait(5)
+  assert.equal(m.get(a.id).status, "done")
+})
+
+test("出力が止まったままなら止めてやり直す", async () => {
+  const { m, children } = setup({ maxConcurrent: 1 }, { stallMs: 30 })
+  const [a] = m.add([{ url: "https://e/1.m3u8" }])
+  await tick()
+  await wait(120)
+  assert.ok(children.length >= 2)
+  assert.ok(m.get(a.id).autoRetries >= 1)
+  m.cancel(a.id)
+  await wait(5)
 })

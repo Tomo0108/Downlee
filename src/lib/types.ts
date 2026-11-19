@@ -201,6 +201,12 @@ export interface FoundMedia {
   nav?: number
   /** 広告のリストに当たったもの。ふだんは隠す */
   ad?: boolean
+  /** size がマニフェストからの見積もりなら true */
+  sizeApprox?: boolean
+  duration?: number | null
+  height?: number | null
+  /** 縮小したサムネイル（data: URL） */
+  thumbnail?: string | null
 }
 
 export interface BrowserState {

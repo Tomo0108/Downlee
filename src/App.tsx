@@ -29,7 +29,7 @@ export default function App() {
 
 function Shell() {
   const notify = useNotice()
-  const [view, setView] = useState<AppView>("download")
+  const [view, setView] = useState<AppView>("find")
   const [collapsed, setCollapsed] = useState(() => {
     try {
       return localStorage.getItem(COLLAPSE_KEY) === "1"

@@ -2,7 +2,7 @@
  * Downlee の Electron メインプロセス。
  * 画面（renderer）からは用途を限定した IPC だけを受け、yt-dlp・ffmpeg の起動、保存、専用ブラウザの管理をここで行う。
  */
-const { app, BrowserWindow, Notification, clipboard, dialog, ipcMain, nativeTheme, net, session, shell } = require("electron")
+const { app, BrowserWindow, Notification, clipboard, dialog, ipcMain, nativeImage, nativeTheme, net, session, shell } = require("electron")
 const fs = require("node:fs")
 const path = require("node:path")
 const { spawn, execFile } = require("node:child_process")
@@ -121,8 +121,8 @@ async function analyze(url, opts = {}) {
   if (analyzing) killTree(analyzing)
   const p = tools.paths()
   let cookieFile = null
-  if (opts.fromBrowser) cookieFile = await writeCookieFile(target, `analyze-${Date.now()}`)
-  const args = ytdlp.buildAnalyzeArgs(target, store.getSettings(), { cookieFile, referer: opts.referer })
+  if (opts.fromBrowser) cookieFile = await writeCookieFile([target, opts.referer], `analyze-${Date.now()}`)
+  const args = ytdlp.buildAnalyzeArgs(target, store.getSettings(), { cookieFile, referer: opts.referer, headers: opts.fromBrowser ? browserHeaders(target, opts.referer) : undefined })
   return new Promise((resolve, reject) => {
     let child
     try { child = spawnTool(p.ytdlp, args) } catch (e) { return reject(e) }
@@ -157,8 +157,23 @@ async function analyze(url, opts = {}) {
 
 /* ---- 専用ブラウザの cookie（ログインが必要なサイト用） ---- */
 
-async function writeCookieFile(url, name) {
-  const text = await sniffer.cookiesFor(url)
+/** 専用ブラウザで見つけたものを取りに行くときのヘッダー（ブラウザが送ったものに合わせる） */
+function browserHeaders(url, referer) {
+  const h = { ...sniffer.headersFor(url), "User-Agent": sniffer.userAgent() }
+  // 別のサイトから読み込まれる配信（HLS など）は Origin を見て断ることがある
+  if (referer && !Object.keys(h).some((k) => k.toLowerCase() === "origin")) {
+    try {
+      const o = new URL(referer).origin
+      if (o !== new URL(url).origin) h.Origin = o
+    } catch {
+      /* URL でなければ付けない */
+    }
+  }
+  return h
+}
+
+async function writeCookieFile(urls, name) {
+  const text = await sniffer.cookiesFor(...[].concat(urls))
   if (!text) return null
   const dir = path.join(app.getPath("userData"), "tmp")
   fs.mkdirSync(dir, { recursive: true })
@@ -344,7 +359,7 @@ function registerIpc() {
     (Array.isArray(paths) ? paths : []).filter((p) => typeof p === "string" && fs.existsSync(p) && fs.statSync(p).isFile()).map((p) => ({ path: p, name: path.basename(p), size: fs.statSync(p).size })),
   )
 
-  handle("clipboard:read", () => clipboard.readText().slice(0, 20000))
+  handle("clipboard:read", async () => String((await clipboard.readText()) ?? "").slice(0, 20000))
 
   handle("browser:open", (url) => sniffer.open(url))
   handle("browser:control", (action) => sniffer.control(action))
@@ -377,6 +392,7 @@ app.whenReady().then(() => {
   sniffer = createSniffer({
     BrowserWindow,
     session,
+    nativeImage,
     getSettings: () => store.getSettings(),
     onFound: (items) => send("browser:found", items),
     onState: (state) => send("browser:state", state),
@@ -398,12 +414,12 @@ app.whenReady().then(() => {
     beforeStart: async (job) => {
       if (job.type !== "download") return
       if (job.fromBrowser) {
-        const file = await writeCookieFile(job.url, job.id)
+        const file = await writeCookieFile([job.url, job.referer], job.id)
         if (file) {
           cookieFiles.set(job.id, file)
           job.cookieFile = file
         }
-        job.headers = { "User-Agent": sniffer.userAgent() }
+        job.headers = browserHeaders(job.url, job.referer)
       }
     },
     afterEnd: (job) => {

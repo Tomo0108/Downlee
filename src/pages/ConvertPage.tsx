@@ -42,7 +42,7 @@ export function ConvertPage({ jobs }: { jobs: Job[] }) {
     }
   }
 
-  const converts = [...jobs.filter((j) => j.type === "convert")].reverse()
+  const converts = jobs.filter((j) => j.type === "convert")
   const finished = converts.filter((j) => ["done", "error", "canceled"].includes(j.status)).length
 
   return (

@@ -1,14 +1,14 @@
 import { ArrowLeft, ArrowRight, Download, Globe, Loader2, RotateCw, Radar, Search, Trash2, X } from "lucide-react"
 import { type FormEvent, useEffect, useState } from "react"
 import { HelpButton } from "@/components/HelpButton"
-import { IconButton, ListFrame, useNotice } from "@/components/common"
+import { IconButton, ListFrame, Thumb, useNotice } from "@/components/common"
 import { PresetMenu } from "@/components/PresetMenu"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { bridge } from "@/lib/bridge"
-import { formatBytes, hostOf } from "@/lib/format"
+import { formatBytes, formatDuration, hostOf } from "@/lib/format"
 import { presetById, requestFor } from "@/lib/presets"
 import type { BrowserState, FoundMedia, Settings } from "@/lib/types"
 
@@ -57,7 +57,8 @@ export function FindPage({ settings, onAnalyze }: { settings: Settings; onAnalyz
   const pageKey = (u?: string) => (u ?? "").split("#")[0]
   const isCurrent = (m: FoundMedia) => !state.open || (state.nav !== undefined && m.nav === state.nav) || (!!state.url && pageKey(m.pageUrl) === pageKey(state.url))
   const visible = found.filter((m) => isCurrent(m) && !m.ad)
-  const list = [...(allPages ? found : visible)].reverse()
+  // 見つけた順に下へ足していく
+  const list = allPages ? found : visible
   const hidden = found.length - visible.length
   const analyzePage = () => state.url && onAnalyze(state.url, { fromBrowser: true })
 
@@ -69,7 +70,7 @@ export function FindPage({ settings, onAnalyze }: { settings: Settings; onAnalyz
           <HelpButton
             title="見つける"
             sections={[
-              { title: "使い方", items: ["ページを Downlee 専用のブラウザで開き、動画を再生してください。ページが読み込んだ動画・音声がここに並びます。", "［保存］で選んだ形式で保存します。［読み込む］では画質を選べます。", "［このページを読み込む］は、開いているページそのものを［ダウンロード］で読み込みます。"] },
+              { title: "使い方", items: ["ページを Downlee 専用のブラウザで開き、動画を再生してください。ページが読み込んだ動画・音声がここに並びます。", "［保存］で選んだ形式で保存します。［読み込む］では画質を選べます。", "HLS・DASH の容量に付く「約」は、画質と長さからの見積もりです。", "［このページを読み込む］は、開いているページそのものを［ダウンロード］で読み込みます。"] },
               { title: "ログインが必要なサイト", items: ["専用ブラウザでログインしておくと、そのログイン状態でダウンロードします。", "ログイン情報は Downlee の中だけに保存され、ふだんのブラウザとは分かれています。［設定］から消せます。"] },
               { title: "広告", items: ["専用ブラウザでは広告と追跡をブロックし、動画広告らしいものは隠します（［設定］で切り替え）。", "ほかのページで見つかったものと広告らしいものは［すべて］で表示します。", "ブラウザの拡張機能（展開済みのフォルダ）も［設定］から入れられます。"] },
               { title: "見つからないとき", items: ["一度再生を始めると見つかることがあります。", "それでも出ないときは［このページを読み込む］で、ページごと読み込めます。", "［すべて］を押すと、広告と判定して隠したものも表示します。", "DRM（著作権保護）がかかった動画は再生もダウンロードもできません。", "除外するサイトは［設定］で指定できます。"] },
@@ -148,11 +149,12 @@ export function FindPage({ settings, onAnalyze }: { settings: Settings; onAnalyz
             <ul className="flex flex-col gap-0.5">
               {list.map((m) => (
                 <li key={m.id} className="flex items-center gap-3 rounded-lg px-3 py-2.5 hover:bg-accent/60">
-                  <Badge variant="outline" className="w-14 shrink-0 justify-center text-[11px]">
-                    {KIND_LABEL[m.kind]}
-                  </Badge>
+                  <Thumb src={m.thumbnail} audio={m.kind === "audio"} className="w-24" />
                   <div className="min-w-0 flex-1">
                     <div className="flex min-w-0 items-center gap-2">
+                      <Badge variant="outline" className="shrink-0 text-[11px]">
+                        {KIND_LABEL[m.kind]}
+                      </Badge>
                       <span className="truncate text-sm font-medium">{m.pageTitle || hostOf(m.pageUrl)}</span>
                       {m.ad && (
                         <Badge variant="outline" className="shrink-0 text-[11px] font-normal text-muted-foreground">
@@ -160,8 +162,8 @@ export function FindPage({ settings, onAnalyze }: { settings: Settings; onAnalyz
                         </Badge>
                       )}
                     </div>
-                    <div className="truncate text-xs text-muted-foreground" title={m.url}>
-                      {[formatBytes(m.size), hostOf(m.url), m.url.split(/[?#]/)[0].split("/").pop()].filter(Boolean).join(" · ")}
+                    <div className="mt-0.5 truncate text-xs text-muted-foreground tabular-nums" title={m.url}>
+                      {[m.size ? `${m.sizeApprox ? "約 " : ""}${formatBytes(m.size)}` : "", m.height ? `${m.height}p` : "", formatDuration(m.duration), hostOf(m.url)].filter(Boolean).join(" · ")}
                     </div>
                   </div>
                   <Button size="sm" variant="ghost" onClick={() => onAnalyze(m.url, { fromBrowser: true, referer: m.pageUrl })}>

@@ -35,7 +35,7 @@ function codecSort(codec, container) {
  */
 function buildDownloadArgs(job, s, t = {}) {
   const args = ["--newline", "--progress", "--no-colors", "--encoding", "utf-8", "--no-quiet"]
-  args.push("--progress-template", `download:${PROGRESS_PREFIX}%(progress.status)s|%(progress.downloaded_bytes)s|%(progress.total_bytes)s|%(progress.total_bytes_estimate)s|%(progress.speed)s|%(progress.eta)s|%(info.playlist_index)s|%(info.n_entries)s`)
+  args.push("--progress-template", `download:${PROGRESS_PREFIX}%(progress.status)s|%(progress.downloaded_bytes)s|%(progress.total_bytes)s|%(progress.total_bytes_estimate)s|%(progress.speed)s|%(progress.eta)s|%(info.playlist_index)s|%(info.n_entries)s|%(progress.fragment_index)s|%(progress.fragment_count)s`)
   args.push("--print", `before_dl:${INFO_PREFIX}%(id)s|%(title)s|%(thumbnail)s|%(duration)s|%(playlist_index)s|%(n_entries)s`)
   args.push("--print", `after_move:${FILE_PREFIX}%(filepath)s`)
   if (t.ffmpegDir) args.push("--ffmpeg-location", t.ffmpegDir)
@@ -100,7 +100,8 @@ function buildDownloadArgs(job, s, t = {}) {
   args.push("--continue", "--no-mtime")
 
   args.push("-N", String(clampInt(s.concurrentFragments, 1, 16, 4)))
-  args.push("--retries", "10", "--fragment-retries", "10")
+  // 途中で止まらないように：固まった接続は 30 秒で切って取り直し、失敗した断片は間をあけて何度も取り直す
+  args.push("--socket-timeout", "30", "--retries", "20", "--fragment-retries", "50", "--retry-sleep", "http:exp=1:20", "--retry-sleep", "fragment:exp=1:20", "--extractor-retries", "5")
   if (s.rateLimit) args.push("-r", String(s.rateLimit))
   if (s.proxy) args.push("--proxy", String(s.proxy))
   if (job.cookieFile) args.push("--cookies", job.cookieFile)
@@ -120,6 +121,7 @@ function buildAnalyzeArgs(url, s, extra = {}) {
   if (extra.cookieFile) args.push("--cookies", extra.cookieFile)
   else if (s.cookiesFromBrowser) args.push("--cookies-from-browser", s.cookiesFromBrowser)
   if (extra.referer) args.push("--referer", extra.referer)
+  for (const [k, v] of Object.entries(extra.headers ?? {})) args.push("--add-header", `${k}:${v}`)
   args.push("--", url)
   return args
 }
@@ -158,15 +160,18 @@ function parseLine(line) {
   const text = String(line).replace(/\r/g, "").trimEnd()
   if (!text) return null
   if (text.startsWith(PROGRESS_PREFIX)) {
-    const [status, downloaded, total, estimate, speed, eta, index, count] = text.slice(PROGRESS_PREFIX.length).split("|")
+    const [status, downloaded, total, estimate, speed, eta, index, count, fragIndex, fragCount] = text.slice(PROGRESS_PREFIX.length).split("|")
     const totalBytes = num(total) ?? num(estimate)
     const done = num(downloaded)
+    const fi = num(fragIndex)
+    const fc = num(fragCount)
     return {
       type: "progress",
       status,
       downloaded: done,
       total: totalBytes,
-      percent: done !== null && totalBytes ? Math.min(100, (done / totalBytes) * 100) : null,
+      // HLS などで全体の大きさがわからないときは、取得した断片の数で進み具合を出す
+      percent: done !== null && totalBytes ? Math.min(100, (done / totalBytes) * 100) : fi !== null && fc ? Math.min(100, (fi / fc) * 100) : null,
       speed: num(speed),
       eta: num(eta),
       playlistIndex: num(index),

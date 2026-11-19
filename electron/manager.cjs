@@ -8,6 +8,9 @@ const ytdlp = require("./ytdlp.cjs")
 
 const ACTIVE = new Set(["running", "processing"])
 const FINISHED = new Set(["done", "error", "canceled"])
+/** 自動でやり直すエラー（通信の切断・止まったまま動かない など） */
+const RETRYABLE = new Set(["network", "other", "stalled"])
+const MAX_AUTO_RETRY = 5
 const STAGE_LABEL = {
   Merger: "映像と音声を結合中",
   ExtractAudio: "音声を取り出し中",
@@ -24,7 +27,7 @@ class DownloadManager extends EventEmitter {
   /**
    * @param {{ getSettings: () => any, spawnYtdlp: (args: string[]) => any, spawnFfmpeg: (args: string[]) => any, killTree: (child: any) => void,
    *           getFfmpegDir?: () => string | undefined, onFinished?: (job: any) => void, persist?: (jobs: any[]) => void, beforeStart?: (job: any) => Promise<void> | void,
-   *           afterEnd?: (job: any) => void, now?: () => number }} deps
+   *           afterEnd?: (job: any) => void, now?: () => number, stallMs?: number, retryDelayMs?: number }} deps
    */
   constructor(deps) {
     super()
@@ -33,6 +36,7 @@ class DownloadManager extends EventEmitter {
     this.children = new Map()
     this.stopReason = new Map()
     this.lastEmit = new Map()
+    this.watchdogs = new Map()
     this.now = deps.now ?? (() => Date.now())
   }
 
@@ -63,6 +67,8 @@ class DownloadManager extends EventEmitter {
       finishedAt: null,
     }))
     this.jobs.push(...added)
+    // 同時に動かす数を超えて待っているものも、すぐ一覧に出す
+    for (const j of added) this.emit("job", j)
     this.changed()
     this.pump()
     return added
@@ -82,7 +88,7 @@ class DownloadManager extends EventEmitter {
   resume(id) {
     const job = this.get(id)
     if (!job || !(job.status === "paused" || job.status === "error" || job.status === "canceled")) return
-    this.update(job, { status: "queued", error: null })
+    this.update(job, { status: "queued", error: null, autoRetries: 0, retryAt: null })
     this.pump()
   }
 
@@ -142,6 +148,7 @@ class DownloadManager extends EventEmitter {
     for (const job of this.jobs) {
       if (running >= max) break
       if (job.status !== "queued") continue
+      if (job.retryAt && job.retryAt > this.now()) continue
       running++
       void this.start(job)
     }
@@ -168,10 +175,24 @@ class DownloadManager extends EventEmitter {
       return
     }
     this.children.set(job.id, child)
+    // 出力が長く止まったままなら、いったん止めて続きからやり直す（HLS の取得が固まったときなど）
+    let lastActivity = this.now()
+    const stallMs = this.deps.stallMs ?? 120_000
+    if (job.type === "download") {
+      const timer = setInterval(() => {
+        if (job.status === "running" && this.now() - lastActivity > stallMs) {
+          clearInterval(timer)
+          this.stop(job, "stalled")
+        }
+      }, Math.min(15_000, stallMs))
+      timer.unref?.()
+      this.watchdogs.set(job.id, timer)
+    }
     const errors = []
     let stderrTail = ""
     let duration = job.duration ?? null
     const onLine = (line, fromErr) => {
+      lastActivity = this.now()
       if (job.type === "convert") {
         if (fromErr) {
           stderrTail = (stderrTail + line + "\n").slice(-4000)
@@ -210,6 +231,8 @@ class DownloadManager extends EventEmitter {
     child.on("error", (e) => errors.push(e.message))
     child.on("close", (code) => {
       this.children.delete(job.id)
+      clearInterval(this.watchdogs.get(job.id))
+      this.watchdogs.delete(job.id)
       const reason = this.stopReason.get(job.id)
       this.stopReason.delete(job.id)
       this.deps.afterEnd?.(job)
@@ -218,17 +241,41 @@ class DownloadManager extends EventEmitter {
         this.update(job, { status: "paused", progress: { ...job.progress, speed: null, eta: null } })
       } else if (reason === "canceled") {
         this.finish(job, { status: "canceled" })
+      } else if (reason === "stalled") {
+        this.retryLater(job, "止まったため、続きからやり直します", { code: "stalled", text: "応答が止まったままになりました。" })
       } else if (code === 0) {
         const files = job.type === "convert" ? [job.output] : job.files
         this.finish(job, { status: "done", files, progress: { ...job.progress, percent: 100, speed: null, eta: null, stage: null } })
       } else {
         const message = errors[errors.length - 1] || stderrTail.trim().split("\n").filter(Boolean).pop() || `終了コード ${code}`
+        const friendly = ytdlp.friendlyError(message)
+        if (job.type === "download" && RETRYABLE.has(friendly.code) && !(job.playlist && job.files.length > 0)) {
+          this.retryLater(job, "接続をやり直しています", friendly, message)
+          return
+        }
         // プレイリストで一部だけ失敗したときは、できた分を残して「一部失敗」にする
         const partial = job.playlist && job.files.length > 0
-        this.finish(job, { status: partial ? "done" : "error", partial, error: ytdlp.friendlyError(message), detail: message.slice(0, 2000), progress: { ...job.progress, speed: null, eta: null, stage: null } })
+        this.finish(job, { status: partial ? "done" : "error", partial, error: friendly, detail: message.slice(0, 2000), progress: { ...job.progress, speed: null, eta: null, stage: null } })
       }
       this.pump()
     })
+  }
+
+  /** 少し待って続きからやり直す（--continue で取得済みの分は使う）。回数を使い切ったら失敗にして false */
+  retryLater(job, label, error, detail) {
+    const n = (job.autoRetries ?? 0) + 1
+    if (n > MAX_AUTO_RETRY) {
+      this.finish(job, { status: "error", error, detail: detail ? String(detail).slice(0, 2000) : undefined, progress: { ...job.progress, speed: null, eta: null, stage: null } })
+      this.pump()
+      return false
+    }
+    this.update(job, { status: "queued", autoRetries: n, retryAt: this.now() + (this.deps.retryDelayMs ?? 3000) * n, progress: { ...job.progress, speed: null, eta: null, stage: `${label}（${n}/${MAX_AUTO_RETRY}）` } })
+    const t = setTimeout(() => {
+      if (job.status === "queued") this.pump()
+    }, job.retryAt - this.now() + 5)
+    t.unref?.()
+    this.pump()
+    return true
   }
 
   progress(job, patch) {

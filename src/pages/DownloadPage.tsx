@@ -113,7 +113,8 @@ export function DownloadPage({ settings, jobs, request, onSettings }: { settings
   const active = downloads.filter((j) => ["running", "processing", "queued"].includes(j.status)).length
   const paused = downloads.filter((j) => j.status === "paused").length
   const finished = downloads.filter((j) => ["done", "error", "canceled"].includes(j.status)).length
-  const ordered = [...downloads].reverse()
+  // 追加した順に下へ足していく
+  const ordered = downloads
 
   return (
     <div className="h-full overflow-y-auto">
@@ -123,7 +124,7 @@ export function DownloadPage({ settings, jobs, request, onSettings }: { settings
           <HelpButton
             title="ダウンロード"
             sections={[
-              { title: "使い方", items: ["動画のページの URL を貼り付けて Enter を押すと、画質と形式の一覧を読み込みます。", "［ダウンロード］で、選んだ形式・画質で保存します。既定は最高画質です。", "URL を複数まとめて貼ると、既定の形式でまとめてダウンロードします。"] },
+              { title: "使い方", items: ["動画のページの URL を貼り付けて Enter を押すと、画質と形式の一覧を読み込みます。", "［ダウンロード］で、選んだ形式・画質で保存します。既定は最高画質です。", "URL を複数まとめて貼ると、既定の形式でまとめてダウンロードします。", "通信が切れたり止まったままになったりしたときは、自動で続きからやり直します（5 回まで）。"] },
               { title: "対応しているサイト", items: ["YouTube・X（Twitter）・ニコニコ動画・TVer・Vimeo など 1,800 以上のサイトに対応しています（yt-dlp を使っています）。", "対応していないページは［見つける］で開くと、ページが再生する動画を拾えます。"] },
               { title: "できないこと", items: ["DRM（著作権保護）がかかった動画（Netflix・Amazon Prime Video・Disney+ など）はダウンロードできません。保護を外す機能はありません。", "保存した動画は、著作権法とサイトの利用規約の範囲で使ってください。"] },
             ]}

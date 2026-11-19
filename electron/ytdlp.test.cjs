@@ -63,6 +63,7 @@ test("進み具合・ファイル・情報・段階の行を読む", () => {
   assert.equal(p.playlistCount, 3)
   const est = y.parseLine("DLPROG downloading|500|NA|2000|NA|NA|NA|NA")
   assert.equal(est.percent, 25)
+  assert.equal(y.parseLine("DLPROG downloading|500|NA|NA|NA|NA|NA|NA|30|120").percent, 25)
   assert.deepEqual(y.parseLine("DLFILE C:\\DL\\a b.mp4"), { type: "file", path: "C:\\DL\\a b.mp4" })
   const info = y.parseLine("DLINFO abc|題名|に|縦棒|https://i/t.jpg|61|NA|NA")
   assert.equal(info.title, "題名|に|縦棒")

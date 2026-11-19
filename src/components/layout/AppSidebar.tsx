@@ -7,8 +7,8 @@ import { cn } from "@/lib/utils"
 export type AppView = "download" | "find" | "convert" | "history" | "settings"
 
 export const NAV: { id: AppView; label: string; icon: typeof Download; key: string }[] = [
-  { id: "download", label: "ダウンロード", icon: Download, key: "1" },
-  { id: "find", label: "見つける", icon: Radar, key: "2" },
+  { id: "find", label: "見つける", icon: Radar, key: "1" },
+  { id: "download", label: "ダウンロード", icon: Download, key: "2" },
   { id: "convert", label: "変換", icon: Repeat, key: "3" },
   { id: "history", label: "履歴", icon: History, key: "4" },
 ]
