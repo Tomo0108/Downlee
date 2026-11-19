@@ -106,7 +106,7 @@ class DownloadManager extends EventEmitter {
     const job = this.get(id)
     if (!job) return
     if (ACTIVE.has(job.status)) this.stop(job, "removed")
-    else if (job.via === "browser" && !FINISHED.has(job.status)) this.deps.discard?.(job)
+    else if (job.via === "browser") this.deps.discard?.(job)
     this.jobs = this.jobs.filter((j) => j.id !== id)
     this.emit("removed", id)
     this.changed()
@@ -114,6 +114,7 @@ class DownloadManager extends EventEmitter {
 
   clearFinished() {
     const before = this.jobs.length
+    for (const j of this.jobs) if (FINISHED.has(j.status) && j.via === "browser") this.deps.discard?.(j)
     this.jobs = this.jobs.filter((j) => !FINISHED.has(j.status))
     if (before !== this.jobs.length) {
       this.emit("reset", this.jobs)
@@ -237,6 +238,11 @@ class DownloadManager extends EventEmitter {
         }
       } else if (p.type === "retry") {
         lastRetry = p.message
+        // サイトに拒まれた（403）ら、取り直しを待たずにすぐブラウザ経由へ切り替える
+        if (job.via !== "browser" && /HTTP Error 403/i.test(p.message) && this.deps.startBrowser && this.deps.canBrowser?.(job) && !this.stopReason.has(job.id)) {
+          this.stop(job, "tobrowser")
+          return
+        }
         this.update(job, { progress: { ...job.progress, stage: `サーバーの応答を待っています（取り直し ${p.attempt}${p.max ? `/${p.max}` : ""}）`, speed: null, eta: null } })
       } else if (p.type === "ffstats") {
         started = true
@@ -281,6 +287,8 @@ class DownloadManager extends EventEmitter {
         this.update(job, { status: "paused", progress: { ...job.progress, speed: null, eta: null } })
       } else if (reason === "canceled") {
         this.finish(job, { status: "canceled" })
+      } else if (reason === "tobrowser" && this.switchToBrowser(job)) {
+        // 切り替えた
       } else if (reason === "stalled") {
         const info = job.stallInfo ?? {}
         delete job.stallInfo

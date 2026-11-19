@@ -182,3 +182,23 @@ test("yt-dlp が拒まれたら専用ブラウザ経由に切り替える", asyn
   assert.equal(m.get(a.id).status, "done")
   assert.deepEqual(m.get(a.id).files, ["/tmp/x.mp4"])
 })
+
+test("取り直しで 403 が出たら、待たずにブラウザ経由へ切り替える", async () => {
+  const browserChildren = []
+  const { m, children } = setup({ maxConcurrent: 1 }, {
+    startBrowser: () => {
+      const c = fakeChild()
+      browserChildren.push(c)
+      return c
+    },
+    canBrowser: () => true,
+  })
+  const [a] = m.add([{ url: "https://e/1.m3u8", fromBrowser: true }])
+  await tick()
+  children[0].stderr.write("[download] Got error: HTTP Error 403: Forbidden. Retrying fragment 1 (1/50)...\n")
+  await wait(10)
+  assert.equal(m.get(a.id).via, "browser")
+  assert.equal(browserChildren.length, 1)
+  m.cancel(a.id)
+  await wait(5)
+})

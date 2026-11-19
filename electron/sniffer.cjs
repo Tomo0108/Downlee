@@ -473,9 +473,30 @@ function createSniffer({ BrowserWindow, session, nativeImage, getSettings, onFou
    * 専用ブラウザのページの中から取得する（再生プレーヤーと同じ枠・同じ cookie・同じ通信で取りに行く）。
    * 戻り値：{ status, data: Buffer, contentType, contentRange }
    */
+  // 取得に成功した枠を覚えておく（同じ動画の断片は同じ枠から取る）
+  const workingFrame = new Map()
+
+  function allFrames() {
+    if (!win || win.isDestroyed()) return []
+    try {
+      return win.webContents.mainFrame.framesInSubtree.filter((f) => /^https?:/i.test(f.url))
+    } catch {
+      return [win.webContents.mainFrame]
+    }
+  }
+
+  /**
+   * 専用ブラウザのページの中から取得する（再生プレーヤーと同じ枠・同じ cookie・同じ通信で取りに行く）。
+   * 1. 前に取れた枠 → メディアを読み込んだ枠 → ほかの枠（iframe の再生プレーヤーなど）の順に試す
+   * 2. どの枠でもだめなら、ブラウザが送ったヘッダー・cookie・Referer を付けて取る
+   * 戻り値：{ status, data: Buffer, contentType, contentRange }
+   */
   async function fetchInPage(url, { frameUrl, range } = {}) {
-    const frame = frameFor(frameUrl ?? url)
-    if (!frame) throw new Error("専用ブラウザが閉じています。［見つける］でページを開いたまま、もう一度保存してください。")
+    if (!win || win.isDestroyed()) throw new Error("専用ブラウザが閉じています。［見つける］でページを開いたまま、もう一度保存してください。")
+    const key = mediaKey(frameUrl ?? url)
+    const known = frameFor(frameUrl ?? url)
+    const remembered = workingFrame.get(key)
+    const candidates = [...new Set([remembered, known !== win.webContents.mainFrame ? known : null, ...allFrames().reverse(), win.webContents.mainFrame].filter(Boolean))]
     const code = `(async () => {
       const opts = ${JSON.stringify(range ? { headers: { Range: range } } : {})}
       let r
@@ -486,17 +507,26 @@ function createSniffer({ BrowserWindow, session, nativeImage, getSettings, onFou
       for (let i = 0; i < b.length; i += 0x8000) s += String.fromCharCode.apply(null, b.subarray(i, i + 0x8000))
       return { status: r.status, data: btoa(s), contentType: r.headers.get("content-type"), contentRange: r.headers.get("content-range") }
     })()`
-    let r
-    try {
-      r = await frame.executeJavaScript(code)
-    } catch (e) {
-      r = null
-      // ページから取れない（CORS など）ときは、同じセッションの通信で取る
-      const res = await ses.fetch(url, { headers: range ? { Range: range } : {} })
-      if (!res.ok) return { status: res.status, data: null }
-      return { status: res.status, data: Buffer.from(await res.arrayBuffer()), contentType: res.headers.get("content-type"), contentRange: res.headers.get("content-range") }
+    let lastStatus = 0
+    for (const frame of candidates) {
+      let r
+      try {
+        r = await frame.executeJavaScript(code)
+      } catch {
+        continue // CORS などでこの枠からは取れない
+      }
+      if (r && r.data != null) {
+        workingFrame.set(key, frame)
+        if (workingFrame.size > 200) workingFrame.delete(workingFrame.keys().next().value)
+        return { status: r.status, data: Buffer.from(r.data, "base64"), contentType: r.contentType ?? null, contentRange: r.contentRange ?? null }
+      }
+      lastStatus = r?.status ?? lastStatus
     }
-    return { status: r.status, data: r.data != null ? Buffer.from(r.data, "base64") : null, contentType: r.contentType ?? null, contentRange: r.contentRange ?? null }
+    // ページの中から取れないとき：枠の URL を Referer にして、ブラウザが送ったヘッダー・cookie を付けて取る
+    const ref = (remembered ?? known)?.url
+    const res = await get(url, { url: frameUrl ?? url, pageUrl: /^https?:/i.test(ref || "") ? ref : win.webContents.getURL() }, { headers: range ? { Range: range } : {} })
+    if (!res.ok) return { status: res.status || lastStatus, data: null }
+    return { status: res.status, data: Buffer.from(await res.arrayBuffer()), contentType: res.headers.get("content-type"), contentRange: res.headers.get("content-range") }
   }
 
   function isOpen() {
