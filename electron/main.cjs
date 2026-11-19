@@ -12,6 +12,7 @@ const { createTools } = require("./tools.cjs")
 const { DownloadManager } = require("./manager.cjs")
 const { createSniffer } = require("./sniffer.cjs")
 const { createAdblock } = require("./adblock.cjs")
+const { createBrowserDownloader } = require("./browserdl.cjs")
 const ytdlp = require("./ytdlp.cjs")
 
 const IS_WIN = process.platform === "win32"
@@ -105,6 +106,7 @@ function spawnTool(file, args) {
 
 /** yt-dlp が起動した ffmpeg も一緒に止める */
 function killTree(child) {
+  if (typeof child.abort === "function") return child.abort()
   if (!child.pid) return
   if (IS_WIN) execFile("taskkill", ["/PID", String(child.pid), "/T", "/F"], { windowsHide: true }, () => undefined)
   else {
@@ -402,7 +404,12 @@ app.whenReady().then(() => {
     adblock: createAdblock({ userData, fetchImpl: (url, init) => net.fetch(url, init).catch(() => fetch(url, init)) }),
   })
   const cookieFiles = new Map()
+  const browserDl = createBrowserDownloader({ fetchInPage: (url, o) => sniffer.fetchInPage(url, o), spawnFfmpeg: (args) => spawnTool(tools.paths().ffmpeg, args) })
   manager = new DownloadManager({
+    // yt-dlp が拒まれたら、専用ブラウザで見つけたもの（HLS・動画ファイル）はブラウザ経由で取り直す
+    startBrowser: (job) => browserDl.start(job, store.getSettings()),
+    canBrowser: (job) => job.fromBrowser === true && !["dash", "mss"].includes(job.sourceKind) && !job.sections && !job.playlist,
+    discard: (job) => browserDl.discard(job, store.getSettings()),
     getSettings: () => store.getSettings(),
     spawnYtdlp: (args) => spawnTool(tools.paths().ytdlp, args),
     spawnFfmpeg: (args) => spawnTool(tools.paths().ffmpeg, args),

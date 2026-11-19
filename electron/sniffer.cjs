@@ -137,8 +137,15 @@ function createSniffer({ BrowserWindow, session, nativeImage, getSettings, onFou
 
   const emit = () => onFound([...found.values()])
 
+  // メディアを読み込んだ枠（iframe の中の再生プレーヤーなど）。ブラウザ経由で取得するときに同じ枠から取りに行く
+  const frames = new Map()
+
   ses.webRequest.onSendHeaders((details) => {
     if (!MEDIA_EXT.test(details.url) && !MANIFEST_HINT.test(details.url) && !RANGE_QUERY.test(details.url)) return
+    if (details.frame) {
+      frames.set(mediaKey(details.url), details.frame)
+      if (frames.size > 500) frames.delete(frames.keys().next().value)
+    }
     const h = pickHeaders(details.requestHeaders)
     // Origin・Referer はこの段階のヘッダーに入らないので、読み込んだページ（枠）の URL から付け直す
     if (details.referrer && /^https?:/i.test(details.referrer)) {
@@ -450,6 +457,52 @@ function createSniffer({ BrowserWindow, session, nativeImage, getSettings, onFou
     onFound([])
   }
 
+  /** いま使える枠（メディアを読み込んだ枠。なくなっていればページ全体） */
+  function frameFor(url) {
+    if (!win || win.isDestroyed()) return null
+    const f = url ? frames.get(mediaKey(url)) : null
+    try {
+      if (f && !f.isDestroyed?.() && !f.detached && f.url) return f
+    } catch {
+      /* 枠が消えている */
+    }
+    return win.webContents.mainFrame
+  }
+
+  /**
+   * 専用ブラウザのページの中から取得する（再生プレーヤーと同じ枠・同じ cookie・同じ通信で取りに行く）。
+   * 戻り値：{ status, data: Buffer, contentType, contentRange }
+   */
+  async function fetchInPage(url, { frameUrl, range } = {}) {
+    const frame = frameFor(frameUrl ?? url)
+    if (!frame) throw new Error("専用ブラウザが閉じています。［見つける］でページを開いたまま、もう一度保存してください。")
+    const code = `(async () => {
+      const opts = ${JSON.stringify(range ? { headers: { Range: range } } : {})}
+      let r
+      try { r = await fetch(${JSON.stringify(url)}, opts) } catch (e) { r = await fetch(${JSON.stringify(url)}, { ...opts, credentials: "include" }) }
+      if (!r.ok) return { status: r.status }
+      const b = new Uint8Array(await r.arrayBuffer())
+      let s = ""
+      for (let i = 0; i < b.length; i += 0x8000) s += String.fromCharCode.apply(null, b.subarray(i, i + 0x8000))
+      return { status: r.status, data: btoa(s), contentType: r.headers.get("content-type"), contentRange: r.headers.get("content-range") }
+    })()`
+    let r
+    try {
+      r = await frame.executeJavaScript(code)
+    } catch (e) {
+      r = null
+      // ページから取れない（CORS など）ときは、同じセッションの通信で取る
+      const res = await ses.fetch(url, { headers: range ? { Range: range } : {} })
+      if (!res.ok) return { status: res.status, data: null }
+      return { status: res.status, data: Buffer.from(await res.arrayBuffer()), contentType: res.headers.get("content-type"), contentRange: res.headers.get("content-range") }
+    }
+    return { status: r.status, data: r.data != null ? Buffer.from(r.data, "base64") : null, contentType: r.contentType ?? null, contentRange: r.contentRange ?? null }
+  }
+
+  function isOpen() {
+    return Boolean(win && !win.isDestroyed())
+  }
+
   /** ダウンロードに引き継ぐヘッダー（見つけたときにブラウザが送ったもの） */
   function headersFor(url) {
     return { ...(sentHeaders.get(mediaKey(url)) ?? {}) }
@@ -477,7 +530,7 @@ function createSniffer({ BrowserWindow, session, nativeImage, getSettings, onFou
     await ses.clearCache()
   }
 
-  return { open, control, state, list, clear, cookiesFor, headersFor, clearData, applySettings, extensions, userAgent: () => ses.getUserAgent() }
+  return { open, control, state, list, clear, cookiesFor, headersFor, fetchInPage, isOpen, clearData, applySettings, extensions, userAgent: () => ses.getUserAgent() }
 }
 
 function normalizeUrl(input) {

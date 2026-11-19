@@ -158,3 +158,27 @@ test("ffmpeg で取得するときも大きさを進み具合に出す", async (
   m.cancel(a.id)
   await wait(5)
 })
+
+test("yt-dlp が拒まれたら専用ブラウザ経由に切り替える", async () => {
+  const browserChildren = []
+  const { m, children } = setup({ maxConcurrent: 1 }, {
+    startBrowser: () => {
+      const c = fakeChild()
+      browserChildren.push(c)
+      return c
+    },
+    canBrowser: (j) => j.fromBrowser === true,
+  })
+  const [a] = m.add([{ url: "https://e/1.m3u8", fromBrowser: true }])
+  await tick()
+  children[0].stderr.write("ERROR: unable to download video data: HTTP Error 403: Forbidden\n")
+  children[0].finish(1)
+  await wait(10)
+  assert.equal(m.get(a.id).via, "browser")
+  assert.equal(browserChildren.length, 1)
+  browserChildren[0].stdout.write("DLFILE /tmp/x.mp4\n")
+  browserChildren[0].finish(0)
+  await wait(5)
+  assert.equal(m.get(a.id).status, "done")
+  assert.deepEqual(m.get(a.id).files, ["/tmp/x.mp4"])
+})

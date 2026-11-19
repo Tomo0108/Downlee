@@ -11,6 +11,8 @@ const FINISHED = new Set(["done", "error", "canceled"])
 /** 自動でやり直すエラー（通信の切断・止まったまま動かない など） */
 const RETRYABLE = new Set(["network", "other", "stalled"])
 const MAX_AUTO_RETRY = 5
+/** yt-dlp が拒まれたとき、専用ブラウザ経由に切り替えるエラー */
+const BROWSER_FALLBACK = new Set(["noresponse", "forbidden", "network", "login", "other", "stalled"])
 const STAGE_LABEL = {
   Merger: "映像と音声を結合中",
   ExtractAudio: "音声を取り出し中",
@@ -27,7 +29,8 @@ class DownloadManager extends EventEmitter {
   /**
    * @param {{ getSettings: () => any, spawnYtdlp: (args: string[]) => any, spawnFfmpeg: (args: string[]) => any, killTree: (child: any) => void,
    *           getFfmpegDir?: () => string | undefined, onFinished?: (job: any) => void, persist?: (jobs: any[]) => void, beforeStart?: (job: any) => Promise<void> | void,
-   *           afterEnd?: (job: any) => void, now?: () => number, stallMs?: number, retryDelayMs?: number }} deps
+   *           afterEnd?: (job: any) => void, now?: () => number, stallMs?: number, retryDelayMs?: number,
+   *           startBrowser?: (job: any) => any, canBrowser?: (job: any) => boolean, discard?: (job: any) => void }} deps
    */
   constructor(deps) {
     super()
@@ -103,6 +106,7 @@ class DownloadManager extends EventEmitter {
     const job = this.get(id)
     if (!job) return
     if (ACTIVE.has(job.status)) this.stop(job, "removed")
+    else if (job.via === "browser" && !FINISHED.has(job.status)) this.deps.discard?.(job)
     this.jobs = this.jobs.filter((j) => j.id !== id)
     this.emit("removed", id)
     this.changed()
@@ -167,6 +171,8 @@ class DownloadManager extends EventEmitter {
     try {
       if (job.type === "convert") {
         child = this.deps.spawnFfmpeg(ytdlp.buildConvertArgs(job.input, job.output, job.target, { start: job.start, end: job.end }))
+      } else if (job.via === "browser" && this.deps.startBrowser) {
+        child = this.deps.startBrowser(job)
       } else {
         child = this.deps.spawnYtdlp(ytdlp.buildDownloadArgs(job, this.deps.getSettings(), { ffmpegDir: this.deps.getFfmpegDir?.() }))
       }
@@ -267,7 +273,10 @@ class DownloadManager extends EventEmitter {
       const reason = this.stopReason.get(job.id)
       this.stopReason.delete(job.id)
       this.deps.afterEnd?.(job)
-      if (reason === "removed") return
+      if (reason === "removed") {
+        if (job.via === "browser") this.deps.discard?.(job)
+        return
+      }
       if (reason === "paused") {
         this.update(job, { status: "paused", progress: { ...job.progress, speed: null, eta: null } })
       } else if (reason === "canceled") {
@@ -275,7 +284,9 @@ class DownloadManager extends EventEmitter {
       } else if (reason === "stalled") {
         const info = job.stallInfo ?? {}
         delete job.stallInfo
-        if (!info.gotData && !job.progress.downloaded) {
+        if (!info.gotData && !job.progress.downloaded && this.switchToBrowser(job)) {
+          // 切り替えた
+        } else if (!info.gotData && !job.progress.downloaded) {
           // 一度もデータが届かないときは、待ち続けずに理由を出して止める
           this.finish(job, {
             status: "error",
@@ -292,6 +303,7 @@ class DownloadManager extends EventEmitter {
       } else {
         const message = errors[errors.length - 1] || stderrTail.trim().split("\n").filter(Boolean).pop() || `終了コード ${code}`
         const friendly = ytdlp.friendlyError(message)
+        if (BROWSER_FALLBACK.has(friendly.code) && this.switchToBrowser(job)) return
         if (job.type === "download" && RETRYABLE.has(friendly.code) && !(job.playlist && job.files.length > 0)) {
           this.retryLater(job, "接続をやり直しています", friendly, message)
           return
@@ -302,6 +314,14 @@ class DownloadManager extends EventEmitter {
       }
       this.pump()
     })
+  }
+
+  /** yt-dlp での取得をあきらめ、専用ブラウザ経由で取り直す（1 回だけ）。切り替えたら true */
+  switchToBrowser(job) {
+    if (job.type !== "download" || job.via === "browser" || !this.deps.startBrowser || !this.deps.canBrowser?.(job)) return false
+    this.update(job, { via: "browser", status: "queued", autoRetries: 0, retryAt: null, progress: { ...job.progress, percent: null, downloaded: null, total: null, speed: null, eta: null, stage: "ブラウザ経由に切り替えています" } })
+    this.pump()
+    return true
   }
 
   /** 少し待って続きからやり直す（--continue で取得済みの分は使う）。回数を使い切ったら失敗にして false */
@@ -338,6 +358,7 @@ class DownloadManager extends EventEmitter {
 
   finish(job, patch) {
     this.update(job, { ...patch, finishedAt: new Date(this.now()).toISOString() })
+    if (job.via === "browser" && job.status === "canceled") this.deps.discard?.(job)
     this.deps.onFinished?.(job)
   }
 
