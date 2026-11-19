@@ -1,7 +1,8 @@
-import { Film, Music } from "lucide-react"
-import { type ComponentProps, type ReactNode, createContext, useCallback, useContext, useState } from "react"
+import { ChevronDown, Film, Music } from "lucide-react"
+import { type ChangeEvent, Children, type ComponentProps, type ReactNode, createContext, isValidElement, useCallback, useContext, useState } from "react"
 import { HelpButton, splitHelp } from "@/components/HelpButton"
 import { Button } from "@/components/ui/button"
+import { DropdownMenu, DropdownMenuContent, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { cn } from "@/lib/utils"
 
@@ -19,18 +20,67 @@ export function IconButton({ label, children, className, variant = "ghost", size
   )
 }
 
-/** 見た目をそろえた選択欄（OS の選択欄を使う） */
-export function NativeSelect({ className, children, ...props }: ComponentProps<"select">) {
+/**
+ * 選択欄。OS の選択欄はダーク表示で中身が読みにくくなるため、アプリのメニューで出す。
+ * 書き方は <select> と同じ（<option value> を並べ、onChange で e.target.value を受け取る）。
+ */
+export function NativeSelect({ className, children, value, onChange, disabled, "aria-label": ariaLabel }: ComponentProps<"select">) {
+  const options: { value: string; label: ReactNode }[] = []
+  Children.forEach(children, (child) => {
+    if (!isValidElement(child)) return
+    const props = child.props as { value?: string | number; children?: ReactNode }
+    options.push({ value: String(props.value ?? ""), label: props.children })
+  })
+  const current = options.find((o) => o.value === String(value ?? "")) ?? options[0]
+  const choose = (v: string) => onChange?.({ target: { value: v }, currentTarget: { value: v } } as unknown as ChangeEvent<HTMLSelectElement>)
   return (
-    <select
-      className={cn(
-        "h-9 min-w-0 rounded-md border border-input bg-card px-2.5 pr-8 text-sm outline-none transition-colors focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:opacity-50 dark:bg-input/30",
-        className,
-      )}
-      {...props}
-    >
-      {children}
-    </select>
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild disabled={disabled}>
+        <Button type="button" variant="outline" aria-label={ariaLabel} className={cn("h-9 min-w-0 justify-between gap-2 px-3 font-normal", className)}>
+          <span className="truncate">{current?.label}</span>
+          <ChevronDown className="size-3.5 shrink-0 opacity-60" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="max-h-80 min-w-(--radix-dropdown-menu-trigger-width) overflow-y-auto">
+        <DropdownMenuRadioGroup value={current?.value} onValueChange={choose}>
+          {options.map((o) => (
+            <DropdownMenuRadioItem key={o.value} value={o.value}>
+              {o.label}
+            </DropdownMenuRadioItem>
+          ))}
+        </DropdownMenuRadioGroup>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  )
+}
+
+/** ページの枠（幅・余白・見出しをそろえる） */
+export function PageShell({ title, help, meta, actions, children }: { title: string; help?: ReactNode; meta?: ReactNode; actions?: ReactNode; children: ReactNode }) {
+  return (
+    <div className="h-full overflow-y-auto">
+      <div className="mx-auto flex max-w-4xl flex-col gap-5 px-4 py-6 md:px-8 md:py-8">
+        <div className="flex min-h-9 items-center gap-1">
+          <h1 className="text-lg font-bold tracking-tight">{title}</h1>
+          {help}
+          {meta && <span className="ml-2 text-xs text-muted-foreground tabular-nums">{meta}</span>}
+          {actions && <div className="ml-auto flex items-center gap-1">{actions}</div>}
+        </div>
+        {children}
+      </div>
+    </div>
+  )
+}
+
+/** 一覧などのまとまりの見出し（件数と操作を右に置く） */
+export function SectionHeader({ title, count, actions }: { title: string; count?: ReactNode; actions?: ReactNode }) {
+  return (
+    <div className="mb-1.5 flex min-h-8 items-center gap-2 px-1">
+      <h2 className="text-sm font-semibold">
+        {title}
+        {count !== undefined && count !== null && count !== false && <span className="ml-2 font-normal text-muted-foreground tabular-nums">{count}</span>}
+      </h2>
+      {actions && <div className="ml-auto flex items-center gap-1">{actions}</div>}
+    </div>
   )
 }
 

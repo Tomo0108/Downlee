@@ -1,7 +1,7 @@
-import { FolderOpen, Loader2, Monitor, Moon, Plus, Puzzle, RefreshCw, Settings as SettingsIcon, Sun, Wrench, X } from "lucide-react"
+import { FolderOpen, Loader2, Monitor, Moon, Plus, Puzzle, RefreshCw, Sun, Wrench, X } from "lucide-react"
 import { type ReactNode, useEffect, useState } from "react"
 import { HelpButton } from "@/components/HelpButton"
-import { NativeSelect, ProgressBar, SettingRow, useNotice } from "@/components/common"
+import { NativeSelect, ProgressBar, SettingRow, useNotice, PageShell } from "@/components/common"
 import { PresetMenu } from "@/components/PresetMenu"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -91,12 +91,7 @@ export function SettingsPage({ settings, onChange, theme, setTheme }: { settings
   }
 
   return (
-    <div className="h-full overflow-y-auto">
-      <div className="mx-auto flex max-w-4xl flex-col gap-4 px-4 py-6 md:px-8 md:py-8">
-        <h1 className="flex items-center gap-2 text-lg font-bold">
-          <SettingsIcon className="size-5 text-primary" />
-          設定
-        </h1>
+    <PageShell title="設定">
 
         <Section title="保存">
           <SettingRow label="保存先">
@@ -312,8 +307,7 @@ export function SettingsPage({ settings, onChange, theme, setTheme }: { settings
 
         <Separator className="my-2" />
         <p className="text-center text-xs text-muted-foreground">Downlee ver.{version}</p>
-      </div>
-    </div>
+    </PageShell>
   )
 }
 

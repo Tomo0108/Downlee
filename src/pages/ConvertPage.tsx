@@ -2,7 +2,7 @@ import { FileVideo, Plus, Repeat, Trash2, X } from "lucide-react"
 import { type DragEvent, useState } from "react"
 import { HelpButton } from "@/components/HelpButton"
 import { JobList } from "@/components/JobList"
-import { IconButton, ListFrame, useNotice } from "@/components/common"
+import { IconButton, ListFrame, useNotice, PageShell } from "@/components/common"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
@@ -46,10 +46,7 @@ export function ConvertPage({ jobs }: { jobs: Job[] }) {
   const finished = converts.filter((j) => ["done", "error", "canceled"].includes(j.status)).length
 
   return (
-    <div className="h-full overflow-y-auto">
-      <div className="mx-auto flex max-w-4xl flex-col gap-5 px-4 py-6 md:px-8 md:py-8">
-        <div className="flex items-center gap-1">
-          <h1 className="text-lg font-bold">変換</h1>
+    <PageShell title="変換" help={
           <HelpButton
             title="変換"
             items={[
@@ -60,7 +57,7 @@ export function ConvertPage({ jobs }: { jobs: Job[] }) {
               "区間は「1:30」のように時刻で入れます。片方だけでもかまいません。",
             ]}
           />
-        </div>
+        }>
 
         <Card
           className={cn("gap-0 p-0 transition-colors", drag && "drop-active")}
@@ -134,7 +131,7 @@ export function ConvertPage({ jobs }: { jobs: Job[] }) {
         </Card>
 
         <section>
-          <div className="mb-1 flex items-center gap-2 px-1">
+          <div className="mb-1.5 flex min-h-8 items-center gap-2 px-1">
             <h2 className="text-sm font-semibold">一覧</h2>
             {finished > 0 && (
               <IconButton label="終わったものを消す" className="ml-auto" onClick={() => void bridge.clearFinished()}>
@@ -146,7 +143,6 @@ export function ConvertPage({ jobs }: { jobs: Job[] }) {
             <JobList jobs={converts} />
           </ListFrame>
         </section>
-      </div>
-    </div>
+    </PageShell>
   )
 }

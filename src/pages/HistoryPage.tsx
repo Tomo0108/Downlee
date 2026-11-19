@@ -1,7 +1,7 @@
 import { Copy, Download, FolderOpen, History, Play, Search, Trash2, X } from "lucide-react"
 import { useEffect, useMemo, useState } from "react"
 import { HelpButton } from "@/components/HelpButton"
-import { IconButton, ListFrame, Thumb, useNotice } from "@/components/common"
+import { IconButton, ListFrame, Thumb, useNotice, PageShell } from "@/components/common"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
@@ -41,20 +41,17 @@ export function HistoryPage() {
   const total = items.reduce((a, h) => a + (h.size || 0), 0)
 
   return (
-    <div className="h-full overflow-y-auto">
-      <div className="mx-auto flex max-w-4xl flex-col gap-5 px-4 py-6 md:px-8 md:py-8">
-        <div className="flex items-center gap-1">
-          <h1 className="text-lg font-bold">履歴</h1>
+    <PageShell title="履歴" help={
           <HelpButton title="履歴" items={["保存が終わったダウンロードと変換が並びます（新しい順、最大 3,000 件）。", "履歴から消しても、保存したファイルは消えません。", "［もう一度ダウンロード］は、前と同じ形式・画質で保存し直します。"]} />
-          {items.length > 0 && <span className="ml-2 text-xs text-muted-foreground tabular-nums">{items.length} 件 · {formatBytes(total)}</span>}
-          <div className="ml-auto">
+        } meta={items.length > 0 ? `${items.length} 件 · ${formatBytes(total)}` : undefined} actions={
+          <>
             {items.length > 0 && (
               <IconButton label="履歴をすべて消す" onClick={() => setConfirm(true)}>
                 <Trash2 />
               </IconButton>
             )}
-          </div>
-        </div>
+          </>
+        }>
 
         {items.length > 0 && (
           <div className="relative">
@@ -119,7 +116,6 @@ export function HistoryPage() {
               })}
             </ul>
         </ListFrame>
-      </div>
 
       <Dialog open={confirm} onOpenChange={setConfirm}>
         <DialogContent className="max-w-sm">
@@ -145,6 +141,6 @@ export function HistoryPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </div>
+    </PageShell>
   )
 }

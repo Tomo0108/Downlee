@@ -1,7 +1,7 @@
 import { ArrowLeft, ArrowRight, CircleDot, Download, Globe, Loader2, RotateCw, Radar, Search, Trash2, X } from "lucide-react"
 import { type FormEvent, useEffect, useState } from "react"
 import { HelpButton } from "@/components/HelpButton"
-import { IconButton, ListFrame, Thumb, useNotice } from "@/components/common"
+import { IconButton, ListFrame, Thumb, useNotice, PageShell } from "@/components/common"
 import { PresetMenu } from "@/components/PresetMenu"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -63,10 +63,7 @@ export function FindPage({ settings, onAnalyze }: { settings: Settings; onAnalyz
   const analyzePage = () => state.url && onAnalyze(state.url, { fromBrowser: true })
 
   return (
-    <div className="h-full overflow-y-auto">
-      <div className="mx-auto flex max-w-4xl flex-col gap-5 px-4 py-6 md:px-8 md:py-8">
-        <div className="flex items-center gap-1">
-          <h1 className="text-lg font-bold">見つける</h1>
+    <PageShell title="見つける" help={
           <HelpButton
             title="見つける"
             sections={[
@@ -77,7 +74,7 @@ export function FindPage({ settings, onAnalyze }: { settings: Settings; onAnalyz
               { title: "操作", items: ["専用ブラウザでは Alt+← で戻る、Alt+→ で進む、F5 で読み直しです。"] },
             ]}
           />
-        </div>
+        }>
 
         <form onSubmit={open} className="flex items-center gap-2 rounded-xl border bg-card p-1.5 shadow-card focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring/30">
           <Globe className="ml-2 size-4 shrink-0 text-muted-foreground" />
@@ -117,7 +114,7 @@ export function FindPage({ settings, onAnalyze }: { settings: Settings; onAnalyz
         )}
 
         <section>
-          <div className="mb-1 flex items-center gap-2 px-1">
+          <div className="mb-1.5 flex min-h-8 items-center gap-2 px-1">
             <h2 className="text-sm font-semibold">
               見つかったメディア
               {list.length > 0 && <span className="ml-2 font-normal text-muted-foreground tabular-nums">{list.length}</span>}
@@ -170,6 +167,7 @@ export function FindPage({ settings, onAnalyze }: { settings: Settings; onAnalyz
                     </div>
                   </div>
                   <Button size="sm" variant="ghost" onClick={() => onAnalyze(m.url, { fromBrowser: true, referer: m.pageUrl })}>
+                    <Search />
                     読み込む
                   </Button>
                   {m.kind === "hls" && (
@@ -187,7 +185,6 @@ export function FindPage({ settings, onAnalyze }: { settings: Settings; onAnalyz
             </ul>
           </ListFrame>
         </section>
-      </div>
-    </div>
+    </PageShell>
   )
 }

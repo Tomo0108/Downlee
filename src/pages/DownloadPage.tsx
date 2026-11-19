@@ -4,7 +4,7 @@ import { HelpButton } from "@/components/HelpButton"
 import { JobList } from "@/components/JobList"
 import { MediaCard } from "@/components/MediaCard"
 import { PresetMenu } from "@/components/PresetMenu"
-import { IconButton, ListFrame, useNotice } from "@/components/common"
+import { IconButton, ListFrame, useNotice, PageShell } from "@/components/common"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
@@ -117,10 +117,7 @@ export function DownloadPage({ settings, jobs, request, onSettings }: { settings
   const ordered = downloads
 
   return (
-    <div className="h-full overflow-y-auto">
-      <div className="mx-auto flex max-w-4xl flex-col gap-5 px-4 py-6 md:px-8 md:py-8">
-        <div className="flex items-center gap-1">
-          <h1 className="text-lg font-bold">ダウンロード</h1>
+    <PageShell title="ダウンロード" help={
           <HelpButton
             title="ダウンロード"
             sections={[
@@ -129,12 +126,13 @@ export function DownloadPage({ settings, jobs, request, onSettings }: { settings
               { title: "できないこと", items: ["DRM（著作権保護）がかかった動画（Netflix・Amazon Prime Video・Disney+ など）はダウンロードできません。保護を外す機能はありません。", "保存した動画は、著作権法とサイトの利用規約の範囲で使ってください。"] },
             ]}
           />
-          <div className="ml-auto flex items-center gap-1">
+        } actions={
+          <>
             <IconButton label="保存先を開く" onClick={() => void bridge.openOutputFolder()}>
               <FolderOpen />
             </IconButton>
-          </div>
-        </div>
+          </>
+        }>
 
         <form onSubmit={submit} className="flex flex-col gap-2">
           <div className="flex items-center gap-2 rounded-xl border bg-card p-1.5 shadow-card focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring/30">
@@ -211,7 +209,7 @@ export function DownloadPage({ settings, jobs, request, onSettings }: { settings
         {state.status === "ready" && <MediaCard info={state.info} source={state.source} settings={{ ...settings, defaultPreset: presetId }} onDownload={enqueue} onClose={() => setState({ status: "idle" })} />}
 
         <section>
-          <div className="mb-1 flex items-center gap-2 px-1">
+          <div className="mb-1.5 flex min-h-8 items-center gap-2 px-1">
             <h2 className="text-sm font-semibold">
               一覧
               {active > 0 && <span className="ml-2 font-normal text-muted-foreground tabular-nums">{active} 件 進行中</span>}
@@ -238,7 +236,6 @@ export function DownloadPage({ settings, jobs, request, onSettings }: { settings
             <JobList jobs={ordered} />
           </ListFrame>
         </section>
-      </div>
-    </div>
+    </PageShell>
   )
 }
