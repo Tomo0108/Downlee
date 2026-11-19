@@ -30,6 +30,7 @@ contextBridge.exposeInMainWorld("downlee", {
   pauseJob: (id) => ipcRenderer.invoke("queue:pause", id),
   resumeJob: (id) => ipcRenderer.invoke("queue:resume", id),
   cancelJob: (id) => ipcRenderer.invoke("queue:cancel", id),
+  finishJobNow: (id) => ipcRenderer.invoke("queue:finish-now", id),
   removeJob: (id) => ipcRenderer.invoke("queue:remove", id),
   clearFinished: () => ipcRenderer.invoke("queue:clear-finished"),
   pauseAll: () => ipcRenderer.invoke("queue:pause-all"),

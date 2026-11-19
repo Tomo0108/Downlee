@@ -153,7 +153,12 @@ function createBrowserDownloader(deps) {
     child.stdout.setEncoding("utf8")
     child.stderr.setEncoding("utf8")
     let aborted = false
+    let finishNow = false
     let ff = null
+    // 録画を「ここで終える」：それまでに記録した分で仕上げる
+    child.finishNow = () => {
+      finishNow = true
+    }
     child.abort = () => {
       aborted = true
       try { ff?.kill() } catch { /* 終わっている */ }
@@ -267,6 +272,7 @@ function createBrowserDownloader(deps) {
         say(`${PROGRESS_PREFIX}downloading|${bytes}|NA|${done ? Math.round((bytes / done) * total) : "NA"}|${Math.round(bytes / secs)}|NA|NA|NA|${done}|${total}`)
       }
       const onMaster = (url, text) => {
+        if (!/^#EXTM3U/.test(text.trim())) return
         const lines = text.split(/\r?\n/)
         const uri = lines.filter((l) => l.trim() && !l.startsWith("#")).pop()
         videoUri = uri ? stripQuery(resolve(uri, url)) : null
@@ -281,6 +287,11 @@ function createBrowserDownloader(deps) {
         const loc = localizeMedia(text, url)
         if (loc.drm) {
           drmSeen = true
+          return
+        }
+        // ライブ配信は、プレーヤーが流し込むデータを写す方式で記録する
+        if (loc.live) {
+          liveSeen = true
           return
         }
         fs.mkdirSync(path.join(work, name), { recursive: true })
@@ -303,6 +314,7 @@ function createBrowserDownloader(deps) {
         say(`[hlsnative] Total fragments: ${total}`)
       }
       let drmSeen = false
+      let liveSeen = false
       const take = (url) => {
         for (const k of [url, stripQuery(url)]) {
           const list = byUrl.get(k)
@@ -323,16 +335,49 @@ function createBrowserDownloader(deps) {
       }
       const wants = (url) => Boolean(take(url))
       const session = await deps.captureAndPlay({ maxHeight: job.maxHeight, onMaster, onPlaylist, onBody, wants }, () => say("[record] ページで動画の再生を始めてください"))
+      // MediaSource に流し込まれたデータ（DASH・独自プレーヤー・ライブ配信）
+      const mse = new Map()
+      let mseBytes = 0
+      const fmt = (sec) => `${Math.floor(sec / 60)}:${String(Math.floor(sec % 60)).padStart(2, "0")}`
+      const pullMse = async () => {
+        if (!session.drain) return null
+        for (let guard = 0; guard < 20; guard++) {
+          const r = await session.drain()
+          if (!r) return null
+          if (r.drm) throw new Error("DRM protected")
+          for (const b of r.bufs) {
+            if (!mse.has(b.i)) mse.set(b.i, { mime: b.mime, file: path.join(work, `mse${b.i}.${/webm/i.test(b.mime) ? "webm" : "mp4"}`) })
+            fs.appendFileSync(mse.get(b.i).file, b.data)
+            mseBytes += b.data.length
+            lastNew = now()
+          }
+          if (!r.more) return r
+        }
+        return null
+      }
+      let mode = null
       try {
         const idle = deps.idleMs ?? 120_000
         for (;;) {
           if (aborted) throw new Error("aborted")
           if (drmSeen) throw new Error("DRM protected")
-          if (tracks.length && done >= total) break
-          const st = await session.state()
+          const m = await pullMse()
+          // HLS の断片を取れていればそちらを使う（元の断片そのもの）。ライブ配信・HLS 以外は流し込まれたデータを使う
+          if (!mode && tracks.length && !liveSeen) mode = "hls"
+          if (!mode && (liveSeen || (mseBytes > 0 && !tracks.length && now() - t0 > 8000))) mode = "mse"
+          if (mode === "hls" && done >= total) break
+          if (mode === "mse") {
+            const live = !isFinite(m?.d ?? NaN)
+            const pct = !live && m?.d ? Math.min(99, ((m.t ?? 0) / m.d) * 100) : "NA"
+            if (live) say(`[record] ライブ配信を録画中 ${fmt(m?.t ?? 0)} · ${(mseBytes / 1048576).toFixed(1)} MB`)
+            else say(`${PROGRESS_PREFIX}downloading|${mseBytes}|NA|${pct !== "NA" && pct > 0 ? Math.round((mseBytes * 100) / pct) : "NA"}|NA|NA|NA|NA|NA|NA`)
+            if (m?.ended || finishNow) break
+          }
+          if (mode === "hls" && finishNow) throw new Error("断片の記録が途中です。HLS は最後まで記録してから仕上げます。")
+          const st = mode === "mse" ? m : await session.state()
           if (st?.drm) throw new Error("DRM protected")
           const ended = st?.ended === true
-          if ((ended && tracks.length) || now() - lastNew > idle) {
+          if (mode !== "mse" && ((ended && tracks.length) || now() - lastNew > idle)) {
             // 再生が終わった・しばらく増えない：残りはページの中から取ってみる
             const missing = [...new Set([...byUrl.values()].flat().filter((x) => !x.written))]
             for (const e of missing) {
@@ -340,13 +385,26 @@ function createBrowserDownloader(deps) {
               const r = await deps.fetchInPage(e.url, { frameUrl: job.url, range: e.range ?? undefined }).catch(() => null)
               if (r?.data && r.status < 400) onBody(e.url, r.data)
             }
-            if (done < total || !tracks.length) throw new Error(tracks.length ? `記録できなかった断片が ${total - done} 個あります。もう一度保存すると、続きから記録します。` : "再生された動画のデータを受け取れませんでした。")
+            if (done < total || !tracks.length) {
+              if (mseBytes > 0) {
+                mode = "mse"
+                break
+              }
+              throw new Error(tracks.length ? `記録できなかった断片が ${total - done} 個あります。もう一度保存すると、続きから記録します。` : "再生された動画のデータを受け取れませんでした。")
+            }
             break
           }
+          if (mode === "mse" && now() - lastNew > idle) break
           await new Promise((r) => setTimeout(r, 1000))
         }
+        if (mode === "mse") await pullMse()
       } finally {
         await session.stop()
+      }
+      if (mode === "mse") {
+        const inputs = [...mse.values()].sort((a, b) => (/^video/.test(a.mime) ? -1 : 1) - (/^video/.test(b.mime) ? -1 : 1)).map((x) => x.file).filter((f) => fs.existsSync(f) && fs.statSync(f).size > 0)
+        if (!inputs.length) throw new Error("再生された動画のデータを受け取れませんでした。")
+        return mux(inputs)
       }
       tracks.sort((a, b) => (a.name === "v" ? -1 : 1) - (b.name === "v" ? -1 : 1))
       return mux(tracks.map((t) => path.join(work, t.name, "index.m3u8")))
@@ -400,7 +458,7 @@ function createBrowserDownloader(deps) {
       if (audioOnly) {
         args.push("-vn", ...(container === "mp3" ? ["-c:a", "libmp3lame", "-b:a", settings.mp3Bitrate || "320K"] : ["-c:a", "copy"]))
       } else if (inputs.length > 1) {
-        args.push("-map", "0:v:0", "-map", "1:a:0", "-c", "copy")
+        args.push("-map", "0:v:0?", "-map", "1:a:0?", "-c", "copy")
       } else {
         args.push("-c", "copy")
       }

@@ -4,7 +4,7 @@
  * DRM で保護されたストリーム（EME / Widevine）は再生もダウンロードもしない。
  */
 const { parseHls, parseDash, estimateSize } = require("./manifest.cjs")
-const { startCapture, PLAY_SCRIPT, STATE_SCRIPT } = require("./capture.cjs")
+const { startCapture, PLAY_SCRIPT, STATE_SCRIPT, DRAIN_SCRIPT } = require("./capture.cjs")
 
 const MEDIA_EXT = /\.(m3u8|mpd|mp4|m4v|webm|mov|mkv|flv|f4v|ogv|mp3|m4a|aac|ogg|oga|opus|wav|flac)(?:$|[?#])/i
 const SEGMENT = /\.(ts|m4s|aac|vtt|webvtt|key)(?:$|[?#])|\/(seg|segment|frag|fragment|chunk)[-_]?\d+/i
@@ -569,6 +569,12 @@ function createSniffer({ BrowserWindow, session, nativeImage, getSettings, onFou
       return {
         stop: () => cap.stop(),
         state: () => frame.executeJavaScript(STATE_SCRIPT).catch(() => null),
+        // プレーヤーが流し込んだデータ（MediaSource）を受け取る
+        drain: async () => {
+          const r = await frame.executeJavaScript(DRAIN_SCRIPT).catch(() => null)
+          if (!r) return null
+          return { ...r, bufs: r.bufs.map((b) => ({ ...b, data: Buffer.from(b.data, "base64") })) }
+        },
       }
     } catch (e) {
       await cap.stop()

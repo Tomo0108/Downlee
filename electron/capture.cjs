@@ -36,6 +36,77 @@ function filterMaster(text, maxHeight) {
   return { text: out.join("\n") + "\n", height: best.height }
 }
 
+/** DASH（mpd）を、映像はいちばん高い画質（上限以下）、音声はいちばん高い音質だけにする。mpd でなければ null */
+function filterMpd(text, maxHeight) {
+  const xml = String(text || "")
+  if (!/<MPD[\s>]/.test(xml)) return null
+  const limit = Number(maxHeight) || 0
+  let changed = false
+  const out = xml.replace(/<AdaptationSet\b[\s\S]*?<\/AdaptationSet>/g, (set) => {
+    const head = set.slice(0, set.indexOf(">") + 1)
+    const reps = [...set.matchAll(/<Representation\b[^>]*?(?:\/>|>[\s\S]*?<\/Representation>)/g)].map((m) => m[0])
+    if (reps.length < 2) return set
+    const info = reps.map((r) => ({ r, bw: Number(/bandwidth="(\d+)"/.exec(r)?.[1]) || 0, h: Number(/height="(\d+)"/.exec(r)?.[1] || /height="(\d+)"/.exec(head)?.[1]) || 0 }))
+    const isVideo = info.some((x) => x.h) || /video/.test(head)
+    const pool = isVideo && limit ? info.filter((x) => !x.h || x.h <= limit) : info
+    const best = (pool.length ? pool : info).sort((a, b) => b.h - a.h || b.bw - a.bw)[0]
+    changed = true
+    let kept = set
+    for (const x of info) if (x !== best) kept = kept.replace(x.r, "")
+    return kept
+  })
+  return changed ? out : null
+}
+
+/** MediaSource に流し込まれるデータを写し取る（ページを読み直す前に入れる）。DRM の再生（EME）のデータは扱わない */
+const MSE_HOOK = `(() => {
+  if (window.__dlMse || typeof MediaSource === "undefined") return
+  const st = (window.__dlMse = { bufs: [] })
+  const add = MediaSource.prototype.addSourceBuffer
+  const append = SourceBuffer.prototype.appendBuffer
+  MediaSource.prototype.addSourceBuffer = function (mime) {
+    const sb = add.call(this, mime)
+    st.bufs.push({ sb, mime: String(mime), chunks: [], size: 0 })
+    return sb
+  }
+  SourceBuffer.prototype.appendBuffer = function (data) {
+    try {
+      const b = st.bufs.find((x) => x.sb === this)
+      if (b) {
+        const u8 = data instanceof ArrayBuffer ? new Uint8Array(data.slice(0)) : new Uint8Array(data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength))
+        b.chunks.push(u8)
+        b.size += u8.length
+      }
+    } catch {}
+    return append.call(this, data)
+  }
+})()`
+
+/** 写し取ったデータを渡して空にする（1 回に 32 MB まで） */
+const DRAIN_SCRIPT = `(() => {
+  const st = window.__dlMse
+  if (!st) return null
+  const v = [...document.querySelectorAll("video")].sort((a, b) => b.clientWidth * b.clientHeight - a.clientWidth * a.clientHeight)[0]
+  const out = []
+  let budget = 32 * 1024 * 1024
+  st.bufs.forEach((b, i) => {
+    const take = []
+    while (b.chunks.length && budget > 0) {
+      const c = b.chunks.shift()
+      take.push(c)
+      budget -= c.length
+    }
+    if (!take.length) return
+    const all = new Uint8Array(take.reduce((n, c) => n + c.length, 0))
+    let o = 0
+    for (const c of take) { all.set(c, o); o += c.length }
+    let s = ""
+    for (let k = 0; k < all.length; k += 0x8000) s += String.fromCharCode.apply(null, all.subarray(k, k + 0x8000))
+    out.push({ i, mime: b.mime, data: btoa(s) })
+  })
+  return { bufs: out, count: st.bufs.length, more: st.bufs.some((b) => b.chunks.length > 0), drm: Boolean(v && v.mediaKeys), t: v ? v.currentTime : null, d: v ? v.duration : null, ended: v ? v.ended : false }
+})()`
+
 const stripQuery = (u) => String(u).split(/[?#]/)[0]
 
 /**
@@ -56,7 +127,10 @@ async function startCapture(wc, o) {
 
   async function setup(sessionId) {
     await send("Network.enable", { maxResourceBufferSize: 64 * 1024 * 1024, maxTotalBufferSize: 512 * 1024 * 1024 }, sessionId).catch(() => undefined)
-    await send("Fetch.enable", { patterns: [{ urlPattern: "*m3u8*", requestStage: "Response" }, { urlPattern: "*format=m3u8*", requestStage: "Response" }] }, sessionId).catch(() => undefined)
+    await send("Fetch.enable", { patterns: [{ urlPattern: "*m3u8*", requestStage: "Response" }, { urlPattern: "*.mpd*", requestStage: "Response" }, { urlPattern: "*manifest*", requestStage: "Response" }] }, sessionId).catch(() => undefined)
+    // 読み直したページで、プレーヤーが流し込むデータを写し取れるようにする
+    await send("Page.enable", {}, sessionId).catch(() => undefined)
+    await send("Page.addScriptToEvaluateOnNewDocument", { source: MSE_HOOK, runImmediately: true }, sessionId).catch(() => undefined)
     await send("Target.setAutoAttach", { autoAttach: true, waitForDebuggerOnStart: true, flatten: true }, sessionId).catch(() => undefined)
   }
 
@@ -76,7 +150,7 @@ async function startCapture(wc, o) {
           const r = await send("Fetch.getResponseBody", { requestId }, sessionId).catch(() => null)
           if (r) body = r.base64Encoded ? Buffer.from(r.body, "base64").toString("utf8") : r.body
         }
-        const filtered = body ? filterMaster(body, o.maxHeight) : null
+        const filtered = body ? filterMaster(body, o.maxHeight) ?? (/<MPD[\s>]/.test(body) ? { text: filterMpd(body, o.maxHeight) ?? body } : null) : null
         if (filtered) {
           o.onMaster?.(request.url, filtered.text)
           const headers = (responseHeaders ?? []).filter((h) => !/^content-(length|encoding)$/i.test(h.name))
@@ -126,6 +200,7 @@ const PLAY_SCRIPT = `(() => {
   if (!v) return "none"
   if (v.mediaKeys) return "drm"
   v.muted = true
+  if (isFinite(v.duration) && v.currentTime > 1) { try { v.currentTime = 0 } catch {} }
   const speed = () => { try { v.playbackRate = 4 } catch {} }
   speed()
   v.addEventListener("ratechange", () => { if (v.playbackRate < 4) setTimeout(speed, 50) })
@@ -142,4 +217,4 @@ const STATE_SCRIPT = `(() => {
   return { t: v.currentTime, d: v.duration, ended: v.ended }
 })()`
 
-module.exports = { filterMaster, startCapture, stripQuery, PLAY_SCRIPT, STATE_SCRIPT }
+module.exports = { filterMaster, filterMpd, startCapture, stripQuery, PLAY_SCRIPT, STATE_SCRIPT, DRAIN_SCRIPT }

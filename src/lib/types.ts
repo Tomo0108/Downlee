@@ -256,6 +256,7 @@ export interface DownleeBridge {
   pauseJob(id: string): Promise<void>
   resumeJob(id: string): Promise<void>
   cancelJob(id: string): Promise<void>
+  finishJobNow(id: string): Promise<void>
   removeJob(id: string): Promise<void>
   clearFinished(): Promise<void>
   pauseAll(): Promise<void>

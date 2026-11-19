@@ -128,6 +128,7 @@ function createMockBridge(): DownleeBridge {
         emit(j)
       }
     },
+    finishJobNow: async () => undefined,
     cancelJob: async (id) => {
       const j = find(id)
       if (j) {

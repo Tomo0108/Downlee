@@ -164,6 +164,7 @@ const PREP_STEPS = [
   [/^\[(hlsnative|dashsegments)\] Total fragments: (\d+)/i, (m) => `最初の断片を待っています（全 ${m[2]} 個）`, true],
   [/^\[download\] Destination:/i, "最初のデータを待っています", true],
   [/^\[(FFmpeg|ffmpeg)\]|Press \[q\] to stop/i, "ffmpeg で取得中", true],
+  [/^\[(record|browser)\] (.+)$/, (m) => m[2], false, true],
 ]
 
 function parseLine(line) {
@@ -206,7 +207,7 @@ function parseLine(line) {
   if (retry) return { type: "retry", message: retry[1], attempt: Number(retry[2]), max: retry[3] === "inf" ? null : Number(retry[3]) }
   // 準備の段階（画面に「いま何をしているか」を出す）
   const prep = PREP_STEPS.find(([re]) => re.test(text))
-  if (prep) return { type: "prep", text: typeof prep[1] === "function" ? prep[1](prep[0].exec(text)) : prep[1], started: prep[2] === true }
+  if (prep) return { type: "prep", text: typeof prep[1] === "function" ? prep[1](prep[0].exec(text)) : prep[1], started: prep[2] === true, always: prep[3] === true }
   // ffmpeg で取得するとき（ライブ配信など）の進み具合：size=   1024KiB time=00:00:12.34
   const ff = /^size=\s*(\d+)\s*(k|ki|m|mi)?B\b.*?time=\s*(-?[\d:.]+)/i.exec(text)
   if (ff) {

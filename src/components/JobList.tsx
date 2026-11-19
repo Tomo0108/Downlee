@@ -1,4 +1,4 @@
-import { CircleAlert, CircleCheck, FolderOpen, Pause, Play, RotateCcw, Square, X } from "lucide-react"
+import { CircleAlert, CircleCheck, Flag, FolderOpen, Pause, Play, RotateCcw, Square, X } from "lucide-react"
 import { IconButton, ProgressBar, Thumb, useNotice } from "@/components/common"
 import { Badge } from "@/components/ui/badge"
 import { MarqueeText } from "@/components/ui/marquee-text"
@@ -84,6 +84,11 @@ export function JobRow({ job }: { job: Job }) {
         {(job.status === "error" || job.status === "canceled") && (
           <IconButton label="やり直す" onClick={() => run(bridge.resumeJob(job.id))}>
             <RotateCcw />
+          </IconButton>
+        )}
+        {job.via === "record" && job.status === "running" && (
+          <IconButton label="ここで終えて保存" onClick={() => run(bridge.finishJobNow(job.id))}>
+            <Flag />
           </IconButton>
         )}
         {!finished && (

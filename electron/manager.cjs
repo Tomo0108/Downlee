@@ -95,6 +95,12 @@ class DownloadManager extends EventEmitter {
     this.pump()
   }
 
+  /** 録画を「ここで終える」：それまでの分で仕上げる */
+  finishNow(id) {
+    const child = this.children.get(id)
+    if (child && typeof child.finishNow === "function") child.finishNow()
+  }
+
   cancel(id) {
     const job = this.get(id)
     if (!job) return
@@ -190,7 +196,8 @@ class DownloadManager extends EventEmitter {
     let lastBytes = null
     let lastRetry = null
     const stallMs = this.deps.stallMs ?? 120_000
-    if (job.type === "download") {
+    // ブラウザ経由・録画は、取り直しと待ち時間をそれぞれの中で見ている
+    if (job.type === "download" && !job.via) {
       const timer = setInterval(() => {
         if (job.status === "running" && this.now() - lastActivity > stallMs) {
           clearInterval(timer)
@@ -233,7 +240,7 @@ class DownloadManager extends EventEmitter {
       } else if (p.type === "prep") {
         if (p.started) started = true
         // 「全 N 個」のあとに来る「最初のデータを待っています」で上書きしない
-        if (job.progress.downloaded == null && !(p.started && /^最初の/.test(job.progress.stage ?? "") && /^最初の/.test(p.text))) {
+        if ((p.always || job.progress.downloaded == null) && !(p.started && /^最初の/.test(job.progress.stage ?? "") && /^最初の/.test(p.text))) {
           this.update(job, { progress: { ...job.progress, stage: p.text } })
         }
       } else if (p.type === "retry") {

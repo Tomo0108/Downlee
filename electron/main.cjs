@@ -316,6 +316,7 @@ function registerIpc() {
   handle("queue:pause", (id) => manager.pause(id))
   handle("queue:resume", (id) => manager.resume(id))
   handle("queue:cancel", (id) => manager.cancel(id))
+  handle("queue:finish-now", (id) => manager.finishNow(id))
   handle("queue:remove", (id) => manager.remove(id))
   handle("queue:clear-finished", () => manager.clearFinished())
   handle("queue:pause-all", () => manager.pauseAll())
