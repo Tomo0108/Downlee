@@ -8,6 +8,7 @@ const path = require("node:path")
 const { EventEmitter } = require("node:events")
 const { PassThrough } = require("node:stream")
 const { stripQuery } = require("./capture.cjs")
+const { assembleTrack } = require("./assemble.cjs")
 
 const PROGRESS_PREFIX = "DLPROG "
 const FILE_PREFIX = "DLFILE "
@@ -62,7 +63,8 @@ function pickVariant(master, maxHeight) {
 
 /**
  * media の HLS を、手元のファイルを指す形に書き換える。
- * 戻り値：{ playlist, files: [{ url, name, range }], drm, live }
+ * 戻り値：{ playlist, files: [{ url, name, range, segment, seq, key, map }], drm, live }
+ * 断片には、つなぐときに使う情報（番号・AES-128 の鍵ファイルと IV・初期化の断片）を付ける。
  * BYTERANGE の断片は取るときに範囲を指定するので、書き換えたあとは丸ごとのファイルになる。
  */
 function localizeMedia(text, base) {
@@ -75,6 +77,9 @@ function localizeMedia(text, base) {
   let seg = 0
   let key = 0
   let map = 0
+  let seq = 0
+  let curKey = null
+  let curMap = null
   const rangeOf = (spec, url) => {
     const [len, off] = String(spec).split("@").map(Number)
     const start = Number.isFinite(off) ? off : lastEnd.get(url) ?? 0
@@ -88,6 +93,7 @@ function localizeMedia(text, base) {
       const a = attrs(l.slice(l.indexOf(":") + 1))
       const method = String(a.METHOD || "NONE").toUpperCase()
       if (method === "NONE") {
+        if (l.startsWith("#EXT-X-KEY:")) curKey = null
         out.push(l)
         continue
       }
@@ -98,6 +104,7 @@ function localizeMedia(text, base) {
       }
       const name = `key${key++}.bin`
       files.push({ url: resolve(a.URI, base), name })
+      if (l.startsWith("#EXT-X-KEY:")) curKey = { file: name, iv: a.IV || null }
       out.push(l.replace(/URI="[^"]*"/, `URI="${name}"`))
       continue
     }
@@ -105,8 +112,14 @@ function localizeMedia(text, base) {
       const a = attrs(l.slice(11))
       const url = resolve(a.URI, base)
       const name = `map${map++}.mp4`
-      files.push({ url, name, range: a.BYTERANGE ? rangeOf(a.BYTERANGE, url) : null })
+      files.push({ url, name, range: a.BYTERANGE ? rangeOf(a.BYTERANGE, url) : null, key: curKey })
+      curMap = name
       out.push(`#EXT-X-MAP:URI="${name}"`)
+      continue
+    }
+    if (l.startsWith("#EXT-X-MEDIA-SEQUENCE:")) {
+      seq = Number.parseInt(l.slice(22), 10) || 0
+      out.push(l)
       continue
     }
     if (l.startsWith("#EXT-X-BYTERANGE:")) {
@@ -119,7 +132,7 @@ function localizeMedia(text, base) {
     }
     const url = resolve(l, base)
     const name = `seg${String(seg++).padStart(5, "0")}.bin`
-    files.push({ url, name, range: pendingRange ? rangeOf(pendingRange, url) : null, segment: true })
+    files.push({ url, name, range: pendingRange ? rangeOf(pendingRange, url) : null, segment: true, seq: seq++, key: curKey, map: curMap })
     pendingRange = null
     out.push(name)
   }
@@ -251,13 +264,52 @@ function createBrowserDownloader(deps) {
       }
       await Promise.all(Array.from({ length: Math.min(4, Math.max(1, Number(settings.concurrentFragments) || 4)) }, worker))
       if (aborted) throw new Error("aborted")
-      return mux(tracks.map((t) => path.join(work, t.name, "index.m3u8")))
+      return joinTracks(tracks)
+    }
+
+    /** 断片を 1 本ずつにつないでから ffmpeg に渡す */
+    async function joinTracks(tracks) {
+      say(`[${job.via === "record" ? "record" : "browser"}] 断片をつないでいます`)
+      const sorted = [...tracks].sort((a, b) => (a.name === "v" ? -1 : 1) - (b.name === "v" ? -1 : 1))
+      const inputs = []
+      for (const t of sorted) {
+        if (aborted) throw new Error("aborted")
+        const files = t.files.map((f) => ({ ...f, file: path.join(work, t.name, f.name) }))
+        inputs.push(assembleTrack(files, path.join(work, t.name, "track")).file)
+      }
+      return mux(inputs)
+    }
+
+    /** 前回すべての断片を記録し終えていれば、再生し直さずにそのままつなぐ */
+    function recordedOnDisk() {
+      const tracks = []
+      for (const name of ["v", "a"]) {
+        const index = path.join(work, name, "index.m3u8")
+        if (!fs.existsSync(index)) continue
+        const loc = localizeMedia(fs.readFileSync(index, "utf8"), "file:///local/")
+        if (loc.drm || loc.live || !loc.files.length) return null
+        if (!loc.files.every((f) => fs.existsSync(path.join(work, name, f.name)) && fs.statSync(path.join(work, name, f.name)).size > 0)) return null
+        tracks.push({ name, ...loc })
+      }
+      return tracks.some((t) => t.name === "v") ? tracks : null
     }
 
     /** 再生しながら記録：プレーヤーが受け取った断片をそのまま保存する（最高画質に固定して再生させる） */
     async function runRecord() {
+      const saved = recordedOnDisk()
+      if (saved) {
+        say("[record] 記録済みの断片から仕上げます")
+        try {
+          return await joinTracks(saved)
+        } catch (e) {
+          if (aborted) throw e
+          say(`[record] ${e instanceof Error ? e.message : e} 記録し直します`)
+        }
+      }
       if (!deps.captureAndPlay) throw new Error("再生しながらの記録に対応していません。")
       say("[record] 再生しながら記録します（最高画質）")
+      // 流し込まれたデータは記録のたびに別のファイルにする（前回の分に足すと壊れる）
+      const runId = now().toString(36)
       let videoUri = null
       let audioUri = null
       const tracks = []
@@ -346,7 +398,7 @@ function createBrowserDownloader(deps) {
           if (!r) return null
           if (r.drm) throw new Error("DRM protected")
           for (const b of r.bufs) {
-            if (!mse.has(b.i)) mse.set(b.i, { mime: b.mime, file: path.join(work, `mse${b.i}.${/webm/i.test(b.mime) ? "webm" : "mp4"}`) })
+            if (!mse.has(b.i)) mse.set(b.i, { mime: b.mime, file: path.join(work, `mse-${runId}-${b.i}.${/webm/i.test(b.mime) ? "webm" : "mp4"}`) })
             fs.appendFileSync(mse.get(b.i).file, b.data)
             mseBytes += b.data.length
             lastNew = now()
@@ -355,6 +407,7 @@ function createBrowserDownloader(deps) {
         }
         return null
       }
+      const mseInputs = () => [...mse.values()].sort((a, b) => (/^video/.test(a.mime) ? -1 : 1) - (/^video/.test(b.mime) ? -1 : 1)).map((x) => x.file).filter((f) => fs.existsSync(f) && fs.statSync(f).size > 0)
       let mode = null
       try {
         const idle = deps.idleMs ?? 120_000
@@ -402,12 +455,19 @@ function createBrowserDownloader(deps) {
         await session.stop()
       }
       if (mode === "mse") {
-        const inputs = [...mse.values()].sort((a, b) => (/^video/.test(a.mime) ? -1 : 1) - (/^video/.test(b.mime) ? -1 : 1)).map((x) => x.file).filter((f) => fs.existsSync(f) && fs.statSync(f).size > 0)
+        const inputs = mseInputs()
         if (!inputs.length) throw new Error("再生された動画のデータを受け取れませんでした。")
         return mux(inputs)
       }
-      tracks.sort((a, b) => (a.name === "v" ? -1 : 1) - (b.name === "v" ? -1 : 1))
-      return mux(tracks.map((t) => path.join(work, t.name, "index.m3u8")))
+      try {
+        return await joinTracks(tracks)
+      } catch (e) {
+        // 断片をつなげなくても、同時に写したデータがあればそちらで仕上げる
+        const inputs = mseInputs()
+        if (aborted || !inputs.length) throw e
+        say("[record] 再生したデータで仕上げます")
+        return mux(inputs)
+      }
     }
 
     async function runFile() {
