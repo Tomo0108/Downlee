@@ -444,6 +444,8 @@ app.whenReady().then(() => {
     persist: (jobs) => store.writeQueue(jobs.map(({ cookieFile: _c, headers: _h, ...j }) => j)),
   })
   manager.restore(store.readQueue())
+  // 一覧から消えたが作業フォルダが残っている記録（アプリの入れ直しなど）を、仕上げ待ちとして戻す
+  manager.restore(browserDl.leftovers(store.getSettings().outputDir, new Set(manager.list().map((j) => j.id))))
   manager.on("job", (job) => {
     const { cookieFile: _c, headers: _h, ...safe } = job
     send("queue:job", safe)

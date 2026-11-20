@@ -155,6 +155,31 @@ function uniquePath(dir, base, ext) {
  *           captureAndPlay?: (opts: any, onWaiting?: () => void) => Promise<{ stop: () => Promise<void>, state: () => Promise<any> }>,
  *           spawnFfmpeg: (args: string[]) => any, now?: () => number, idleMs?: number }} deps
  */
+/** 作業フォルダに残った、再生データの記録（mse-<回>-<番号> と古い版の mse<番号>）。いちばん大きい回のものを返す */
+function leftoverMse(work) {
+  let names = []
+  try {
+    names = fs.readdirSync(work)
+  } catch {
+    return []
+  }
+  const runs = new Map()
+  for (const n of names) {
+    const m = /^mse(?:-([a-z0-9]+)-)?(\d+)\.(mp4|webm)$/.exec(n)
+    if (!m) continue
+    const file = path.join(work, n)
+    const size = fs.statSync(file).size
+    if (!size) continue
+    const k = m[1] ?? ""
+    if (!runs.has(k)) runs.set(k, { size: 0, files: [] })
+    const r = runs.get(k)
+    r.size += size
+    r.files.push({ file, i: Number(m[2]) })
+  }
+  const best = [...runs.values()].sort((a, b) => b.size - a.size)[0]
+  return best ? best.files.sort((a, b) => a.i - b.i).map((x) => x.file) : []
+}
+
 function createBrowserDownloader(deps) {
   const now = deps.now ?? (() => Date.now())
 
@@ -183,6 +208,11 @@ function createBrowserDownloader(deps) {
 
     const run = async () => {
       fs.mkdirSync(work, { recursive: true })
+      // アプリを入れ直しても仕上げられるように、名前と形式だけ残す（URL・cookie は残さない）
+      try {
+        const meta = path.join(work, "job.json")
+        if (!fs.existsSync(meta)) fs.writeFileSync(meta, JSON.stringify({ title: job.title, mode: job.mode, container: job.container, audioFormat: job.audioFormat, createdAt: job.createdAt }))
+      } catch { /* なくても動く */ }
       if (job.via === "record") return runRecord()
       say("[browser] ブラウザ経由で取得します")
       const kind = job.sourceKind
@@ -305,6 +335,13 @@ function createBrowserDownloader(deps) {
           if (aborted) throw e
           say(`[record] ${e instanceof Error ? e.message : e} 記録し直します`)
         }
+      }
+      if (job.recovered) {
+        // 前回の記録の残り：再生し直すページがないので、残っている分で仕上げる
+        const inputs = leftoverMse(work)
+        if (!inputs.length) throw new Error("記録が途中までしか残っていないため、仕上げられません。もう一度ページから保存してください。")
+        say("[record] 記録済みのデータから仕上げます")
+        return mux(inputs)
       }
       if (!deps.captureAndPlay) throw new Error("再生しながらの記録に対応していません。")
       say("[record] 再生しながら記録します（最高画質）")
@@ -563,13 +600,59 @@ function createBrowserDownloader(deps) {
     return child
   }
 
+  /** 保存先に残った作業フォルダのうち、一覧にないもの（アプリの入れ直しなどで一覧から消えたもの）を、仕上げ待ちのジョブにする */
+  function leftovers(dir, knownIds) {
+    const out = []
+    let names = []
+    try {
+      names = fs.readdirSync(dir)
+    } catch {
+      return out
+    }
+    for (const n of names) {
+      const id = /^\.downlee-(.+)$/.exec(n)?.[1]
+      if (!id || knownIds.has(id)) continue
+      const work = path.join(dir, n)
+      try {
+        if (!fs.statSync(work).isDirectory()) continue
+        const hasHls = fs.existsSync(path.join(work, "v", "index.m3u8"))
+        if (!hasHls && !leftoverMse(work).length) continue
+        let meta = {}
+        try {
+          meta = JSON.parse(fs.readFileSync(path.join(work, "job.json"), "utf8"))
+        } catch { /* 古い版の作業フォルダ */ }
+        const at = fs.statSync(work).mtime
+        const stamp = `${at.getFullYear()}-${String(at.getMonth() + 1).padStart(2, "0")}-${String(at.getDate()).padStart(2, "0")} ${String(at.getHours()).padStart(2, "0")}${String(at.getMinutes()).padStart(2, "0")}`
+        out.push({
+          id,
+          type: "download",
+          via: "record",
+          recovered: true,
+          url: "",
+          outputDir: dir,
+          title: meta.title || `録画 ${stamp}`,
+          mode: meta.mode || "video",
+          container: meta.container || "mp4",
+          audioFormat: meta.audioFormat,
+          status: "paused",
+          progress: { percent: null, downloaded: null, total: null, speed: null, eta: null, stage: "記録済みのデータがあります。再開すると仕上げます" },
+          files: [],
+          error: null,
+          createdAt: meta.createdAt || at.toISOString(),
+          finishedAt: null,
+        })
+      } catch { /* 読めないフォルダは飛ばす */ }
+    }
+    return out
+  }
+
   /** 途中までの取得を消す（中止・一覧から削除のとき） */
   function discard(job, settings) {
     const dir = job.outputDir || settings.outputDir
     if (dir && job.id) fs.rmSync(path.join(dir, `.downlee-${job.id}`), { recursive: true, force: true })
   }
 
-  return { start, discard }
+  return { start, discard, leftovers }
 }
 
 module.exports = { createBrowserDownloader, parseMaster, pickVariant, localizeMedia, safeName }
